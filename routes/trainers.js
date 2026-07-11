@@ -28,4 +28,31 @@ router.post('/', protect, adminOnly, async (req, res) => {
   }
 });
 
+// PUT /api/trainers/:id - admin edits trainer
+router.put('/:id', protect, adminOnly, async (req, res) => {
+  try {
+    const { name, email, phone, password } = req.body;
+    const update = { name, email, phone };
+    if (password) {
+      const bcrypt = require('bcryptjs');
+      update.password = await bcrypt.hash(password, 10);
+    }
+    const trainer = await User.findByIdAndUpdate(req.params.id, update, { new: true }).select('-password');
+    if (!trainer) return res.status(404).json({ message: 'Trainer not found' });
+    res.json(trainer);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// DELETE /api/trainers/:id - admin deletes trainer
+router.delete('/:id', protect, adminOnly, async (req, res) => {
+  try {
+    await User.findByIdAndDelete(req.params.id);
+    res.json({ message: 'Trainer deleted' });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
 module.exports = router;

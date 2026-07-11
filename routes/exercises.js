@@ -97,9 +97,36 @@ router.post('/', protect, trainerOrAdmin, async (req, res) => {
 // PUT /api/exercises/:id
 router.put('/:id', protect, trainerOrAdmin, async (req, res) => {
   try {
-    const ex = await Exercise.findByIdAndUpdate(req.params.id, req.body, { new: true });
+    const ex = await Exercise.findById(req.params.id);
     if (!ex) return res.status(404).json({ message: 'Exercise not found' });
-    res.json(ex);
+
+    let imageUrl = ex.image, videoUrl = ex.video, videoPublicId = ex.videoPublicId;
+
+    if (req.files?.image) {
+      const result = await cloudinary.uploader.upload(req.files.image.tempFilePath, { folder: 'exercises' });
+      imageUrl = result.secure_url;
+    }
+    if (req.files?.video) {
+      if (videoPublicId) {
+        await cloudinary.uploader.destroy(videoPublicId, { resource_type: 'video' }).catch(() => {});
+      }
+      const result = await cloudinary.uploader.upload(req.files.video.tempFilePath, {
+        folder: 'exercises/videos', resource_type: 'video'
+      });
+      videoUrl = result.secure_url;
+      videoPublicId = result.public_id;
+    }
+
+    const updates = {
+      ...req.body,
+      image: imageUrl,
+      video: videoUrl,
+      videoPublicId,
+      assignedTo: req.body.assignedTo ? JSON.parse(req.body.assignedTo) : ex.assignedTo,
+      isPublic: req.body.isPublic === 'false' ? false : req.body.isPublic === 'true' ? true : ex.isPublic,
+    };
+    const updated = await Exercise.findByIdAndUpdate(req.params.id, updates, { new: true });
+    res.json(updated);
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
