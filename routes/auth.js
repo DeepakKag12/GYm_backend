@@ -41,4 +41,33 @@ router.get('/me', protect, (req, res) => {
   res.json(req.user);
 });
 
+// PUT /api/auth/update-credentials
+router.put('/update-credentials', protect, async (req, res) => {
+  try {
+    const { currentPassword, newEmail, newPassword } = req.body;
+    const user = await User.findById(req.user._id);
+
+    // Verify current password
+    const match = await bcrypt.compare(currentPassword, user.password);
+    if (!match) return res.status(400).json({ message: 'Current password is incorrect' });
+
+    if (newEmail && newEmail !== user.email) {
+      const exists = await User.findOne({ email: newEmail });
+      if (exists) return res.status(400).json({ message: 'Email already in use' });
+      user.email = newEmail;
+    }
+
+    if (newPassword) {
+      if (newPassword.length < 6) return res.status(400).json({ message: 'New password must be at least 6 characters' });
+      user.password = await bcrypt.hash(newPassword, 10);
+    }
+
+    await user.save();
+    const updated = await User.findById(user._id).select('-password');
+    res.json({ message: 'Credentials updated successfully', user: updated });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
 module.exports = router;

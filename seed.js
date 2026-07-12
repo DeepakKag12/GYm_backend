@@ -24,11 +24,14 @@ const seed = async () => {
   let admin = await User.findOne({ role: 'admin' });
   if (!admin) {
     admin = await User.create({
-      name: 'Ajeet Singh', email: 'admin@fitnation.com',
+      name: 'Ajeet', email: 'admin@fitnation.com',
       phone: '9999999999', password: await bcrypt.hash('admin123', 10),
       role: 'admin'
     });
     console.log('Admin created: admin@fitnation.com / admin123');
+  } else if (admin.name === 'Ajeet Singh') {
+    await User.updateOne({ _id: admin._id }, { name: 'Ajeet' });
+    console.log('Admin name updated to Ajeet');
   }
 
   // ─────────────────────────────────────────────
