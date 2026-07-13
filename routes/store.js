@@ -4,6 +4,16 @@ const Product = require('../models/Product');
 const cloudinary = require('../config/cloudinary');
 const { protect, adminOnly } = require('../middleware/auth');
 
+/** Upload to Cloudinary — buffer-safe (Vercel) + auto image compression */
+async function uploadImage(file, folder = 'store') {
+  const opts = { folder, quality: 'auto', fetch_format: 'auto' };
+  if (file.tempFilePath) return cloudinary.uploader.upload(file.tempFilePath, opts);
+  return new Promise((resolve, reject) => {
+    const stream = cloudinary.uploader.upload_stream(opts, (err, r) => err ? reject(err) : resolve(r));
+    stream.end(file.data);
+  });
+}
+
 // GET /api/store?category=protein
 router.get('/', async (req, res) => {
   try {
@@ -36,7 +46,7 @@ router.post('/', protect, adminOnly, async (req, res) => {
     if (req.files?.images) {
       const files = Array.isArray(req.files.images) ? req.files.images : [req.files.images];
       for (const file of files) {
-        const result = await cloudinary.uploader.upload(file.tempFilePath, { folder: 'store' });
+        const result = await uploadImage(file, 'store');
         images.push(result.secure_url);
       }
     }
@@ -68,7 +78,7 @@ router.put('/:id', protect, adminOnly, async (req, res) => {
       const files = Array.isArray(req.files.images) ? req.files.images : [req.files.images];
       const newImages = [];
       for (const file of files) {
-        const result = await cloudinary.uploader.upload(file.tempFilePath, { folder: 'store' });
+        const result = await uploadImage(file, 'store');
         newImages.push(result.secure_url);
       }
       update.images = newImages;

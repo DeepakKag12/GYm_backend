@@ -4,6 +4,32 @@ const Exercise = require('../models/Exercise');
 const cloudinary = require('../config/cloudinary');
 const { protect, trainerOrAdmin } = require('../middleware/auth');
 
+/**
+ * Upload a file to Cloudinary.
+ * Supports both temp-file mode (local dev) and in-memory buffer mode (Vercel).
+ * Images: auto quality + format compression.
+ * Videos: auto quality + 1 Mbps bitrate cap.
+ */
+async function uploadToCloudinary(file, options = {}) {
+  // Inject compression defaults
+  const isVideo = options.resource_type === 'video';
+  const compressed = isVideo
+    ? { quality: 'auto', video_codec: 'auto', bit_rate: '1m', ...options }
+    : { quality: 'auto', fetch_format: 'auto', ...options };
+
+  if (file.tempFilePath) {
+    return cloudinary.uploader.upload(file.tempFilePath, compressed);
+  }
+  // In-memory buffer — use upload_stream wrapped in a Promise
+  return new Promise((resolve, reject) => {
+    const stream = cloudinary.uploader.upload_stream(compressed, (err, result) => {
+      if (err) return reject(err);
+      resolve(result);
+    });
+    stream.end(file.data);
+  });
+}
+
 // GET /api/exercises?muscleGroup=chest&public=true
 router.get('/', async (req, res) => {
   try {
@@ -68,25 +94,32 @@ router.post('/', protect, trainerOrAdmin, async (req, res) => {
     let imageUrl = '', videoUrl = '', videoPublicId = '';
 
     if (req.files?.image) {
-      const result = await cloudinary.uploader.upload(req.files.image.tempFilePath, { folder: 'exercises' });
+      const result = await uploadToCloudinary(req.files.image, { folder: 'exercises' });
       imageUrl = result.secure_url;
     }
     if (req.files?.video) {
-      const result = await cloudinary.uploader.upload(req.files.video.tempFilePath, {
-        folder: 'exercises/videos', resource_type: 'video'
-      });
+      const result = await uploadToCloudinary(req.files.video, { folder: 'exercises/videos', resource_type: 'video' });
       videoUrl = result.secure_url;
       videoPublicId = result.public_id;
     }
 
     const exercise = await Exercise.create({
-      ...req.body,
-      image: imageUrl,
-      video: videoUrl,
+      title:          req.body.title,
+      description:    req.body.description,
+      instructions:   req.body.instructions,
+      muscleGroup:    req.body.muscleGroup,
+      difficulty:     req.body.difficulty,
+      equipmentNeeded: req.body.equipmentNeeded,
+      sets:           req.body.sets,
+      reps:           req.body.reps,
+      duration:       req.body.duration,
+      videoUrl:       req.body.videoUrl || '',
+      image:          imageUrl,
+      video:          videoUrl,
       videoPublicId,
-      uploadedBy: req.user._id,
-      assignedTo: req.body.assignedTo ? JSON.parse(req.body.assignedTo) : [],
-      isPublic: req.body.isPublic === 'false' ? false : true,
+      uploadedBy:     req.user._id,
+      assignedTo:     req.body.assignedTo ? JSON.parse(req.body.assignedTo) : [],
+      isPublic:       req.body.isPublic === 'false' ? false : true,
     });
     res.status(201).json(exercise);
   } catch (err) {
@@ -103,27 +136,34 @@ router.put('/:id', protect, trainerOrAdmin, async (req, res) => {
     let imageUrl = ex.image, videoUrl = ex.video, videoPublicId = ex.videoPublicId;
 
     if (req.files?.image) {
-      const result = await cloudinary.uploader.upload(req.files.image.tempFilePath, { folder: 'exercises' });
+      const result = await uploadToCloudinary(req.files.image, { folder: 'exercises' });
       imageUrl = result.secure_url;
     }
     if (req.files?.video) {
       if (videoPublicId) {
         await cloudinary.uploader.destroy(videoPublicId, { resource_type: 'video' }).catch(() => {});
       }
-      const result = await cloudinary.uploader.upload(req.files.video.tempFilePath, {
-        folder: 'exercises/videos', resource_type: 'video'
-      });
+      const result = await uploadToCloudinary(req.files.video, { folder: 'exercises/videos', resource_type: 'video' });
       videoUrl = result.secure_url;
       videoPublicId = result.public_id;
     }
 
     const updates = {
-      ...req.body,
-      image: imageUrl,
-      video: videoUrl,
+      title:          req.body.title          || ex.title,
+      description:    req.body.description    ?? ex.description,
+      instructions:   req.body.instructions   ?? ex.instructions,
+      muscleGroup:    req.body.muscleGroup     || ex.muscleGroup,
+      difficulty:     req.body.difficulty      || ex.difficulty,
+      equipmentNeeded: req.body.equipmentNeeded ?? ex.equipmentNeeded,
+      sets:           req.body.sets           ?? ex.sets,
+      reps:           req.body.reps           ?? ex.reps,
+      duration:       req.body.duration       ?? ex.duration,
+      videoUrl:       req.body.videoUrl       !== undefined ? req.body.videoUrl : ex.videoUrl,
+      image:          imageUrl,
+      video:          videoUrl,
       videoPublicId,
-      assignedTo: req.body.assignedTo ? JSON.parse(req.body.assignedTo) : ex.assignedTo,
-      isPublic: req.body.isPublic === 'false' ? false : req.body.isPublic === 'true' ? true : ex.isPublic,
+      assignedTo:     req.body.assignedTo ? JSON.parse(req.body.assignedTo) : ex.assignedTo,
+      isPublic:       req.body.isPublic === 'false' ? false : req.body.isPublic === 'true' ? true : ex.isPublic,
     };
     const updated = await Exercise.findByIdAndUpdate(req.params.id, updates, { new: true });
     res.json(updated);

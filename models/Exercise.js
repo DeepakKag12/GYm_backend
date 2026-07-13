@@ -15,8 +15,9 @@ const exerciseSchema = new mongoose.Schema({
   reps:        { type: String },
   duration:    { type: String },
   image:       { type: String, default: '' },
-  video:       { type: String, default: '' },      // Cloudinary video URL
+  video:       { type: String, default: '' },      // Cloudinary uploaded video URL
   videoPublicId: { type: String, default: '' },
+  videoUrl:    { type: String, default: '' },      // YouTube / external video URL
   // Visibility
   isPublic:    { type: Boolean, default: true },   // Public = visible to all
   assignedTo:  [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }], // Specific members

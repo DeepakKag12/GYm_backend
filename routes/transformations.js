@@ -4,6 +4,16 @@ const Transformation = require('../models/Transformation');
 const cloudinary = require('../config/cloudinary');
 const { protect, trainerOrAdmin } = require('../middleware/auth');
 
+/** Upload to Cloudinary — buffer-safe (Vercel) + auto image compression */
+async function uploadImage(file, folder = 'transformations') {
+  const opts = { folder, quality: 'auto', fetch_format: 'auto' };
+  if (file.tempFilePath) return cloudinary.uploader.upload(file.tempFilePath, opts);
+  return new Promise((resolve, reject) => {
+    const stream = cloudinary.uploader.upload_stream(opts, (err, r) => err ? reject(err) : resolve(r));
+    stream.end(file.data);
+  });
+}
+
 // GET /api/transformations
 router.get('/', async (req, res) => {
   try {
@@ -33,11 +43,11 @@ router.post('/', protect, trainerOrAdmin, async (req, res) => {
   try {
     let beforeImage = '', afterImage = '';
     if (req.files?.beforeImage) {
-      const r = await cloudinary.uploader.upload(req.files.beforeImage.tempFilePath, { folder: 'transformations' });
+      const r = await uploadImage(req.files.beforeImage, 'transformations');
       beforeImage = r.secure_url;
     }
     if (req.files?.afterImage) {
-      const r = await cloudinary.uploader.upload(req.files.afterImage.tempFilePath, { folder: 'transformations' });
+      const r = await uploadImage(req.files.afterImage, 'transformations');
       afterImage = r.secure_url;
     }
     const transformation = await Transformation.create({

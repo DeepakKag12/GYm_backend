@@ -11,7 +11,12 @@ const app = express();
 app.use(cors({ origin: '*', credentials: true }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-app.use(fileUpload({ useTempFiles: true, tempFileDir: '/tmp/' }));
+// On Vercel serverless use in-memory buffers (no /tmp/ write); locally use temp files
+app.use(fileUpload({
+  useTempFiles: process.env.VERCEL !== '1',
+  tempFileDir: '/tmp/',
+  limits: { fileSize: 100 * 1024 * 1024 }, // 100 MB
+}));
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // Health check / root route
