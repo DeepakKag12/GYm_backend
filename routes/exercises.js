@@ -9,8 +9,20 @@ const { protect, trainerOrAdmin } = require('../middleware/auth');
  * Supports both temp-file mode (local dev) and in-memory buffer mode (Vercel).
  * Images: auto quality + format compression.
  * Videos: auto quality + 1 Mbps bitrate cap.
+ *
+ * Throws a descriptive Error if Cloudinary credentials are not configured
+ * so the route's try/catch returns a JSON 500 instead of crashing the process.
  */
 async function uploadToCloudinary(file, options = {}) {
+  // Guard: check credentials are actually configured
+  const cfg = cloudinary.config();
+  if (!cfg.cloud_name || !cfg.api_key || !cfg.api_secret) {
+    throw new Error(
+      'Cloudinary is not configured. Add CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, ' +
+      'CLOUDINARY_API_SECRET to your Vercel environment variables and redeploy.'
+    );
+  }
+
   // Inject compression defaults
   const isVideo = options.resource_type === 'video';
   const compressed = isVideo

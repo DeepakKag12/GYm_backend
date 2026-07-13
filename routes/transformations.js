@@ -6,6 +6,13 @@ const { protect, trainerOrAdmin } = require('../middleware/auth');
 
 /** Upload to Cloudinary — buffer-safe (Vercel) + auto image compression */
 async function uploadImage(file, folder = 'transformations') {
+  const cfg = cloudinary.config();
+  if (!cfg.cloud_name || !cfg.api_key || !cfg.api_secret) {
+    throw new Error(
+      'Cloudinary is not configured. Add CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, ' +
+      'CLOUDINARY_API_SECRET to your Vercel environment variables and redeploy.'
+    );
+  }
   const opts = { folder, quality: 'auto', fetch_format: 'auto' };
   if (file.tempFilePath) return cloudinary.uploader.upload(file.tempFilePath, opts);
   return new Promise((resolve, reject) => {
