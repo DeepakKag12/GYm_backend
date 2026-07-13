@@ -49,6 +49,35 @@ app.get('/', (req, res) => {
   res.json({ status: 'ok', message: 'FitnessByAjeet API is running' });
 });
 
+// MongoDB connection — connect once, reuse connection across serverless invocations
+let isConnected = false;
+let dbError = null;
+
+async function connectDB() {
+  if (isConnected) return;
+  if (!process.env.MONGO_URI) {
+    dbError = new Error('MONGO_URI environment variable is not set');
+    throw dbError;
+  }
+  await mongoose.connect(process.env.MONGO_URI, { serverSelectionTimeoutMS: 10000 });
+  isConnected = true;
+  dbError = null;
+  console.log('✅ MongoDB connected');
+}
+
+connectDB().catch(err => {
+  dbError = err;
+  console.error('MongoDB connection error:', err.message);
+});
+
+// Middleware: fail fast if DB is not connected instead of waiting 10 s to time out
+app.use('/api', (req, res, next) => {
+  if (dbError) {
+    return res.status(503).json({ message: 'Database unavailable. Check MONGO_URI env var on Vercel.' });
+  }
+  next();
+});
+
 // Routes
 app.use('/api/auth',         require('./routes/auth'));
 app.use('/api/members',      require('./routes/members'));
@@ -84,17 +113,6 @@ app.use((err, req, res, next) => {
 if (process.env.VERCEL !== '1') {
   require('./jobs/feeReminder');
 }
-
-// MongoDB connection — connect once, reuse connection across serverless invocations
-let isConnected = false;
-async function connectDB() {
-  if (isConnected) return;
-  await mongoose.connect(process.env.MONGO_URI);
-  isConnected = true;
-  console.log('✅ MongoDB connected');
-}
-
-connectDB().catch(err => console.error('MongoDB connection error:', err));
 
 // Export for Vercel serverless; also listen locally
 if (!process.env.VERCEL) {
