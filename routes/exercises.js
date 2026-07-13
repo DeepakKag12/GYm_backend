@@ -4,6 +4,28 @@ const Exercise = require('../models/Exercise');
 const cloudinary = require('../config/cloudinary');
 const { protect, trainerOrAdmin } = require('../middleware/auth');
 
+// POST /api/exercises/sign-upload
+// Returns a short-lived Cloudinary signature so the browser can upload
+// a video/image DIRECTLY to Cloudinary, bypassing Vercel's 4.5 MB limit.
+router.post('/sign-upload', protect, trainerOrAdmin, (req, res) => {
+  const cfg = cloudinary.config();
+  if (!cfg.cloud_name || !cfg.api_key || !cfg.api_secret) {
+    return res.status(500).json({ message: 'Cloudinary not configured on server.' });
+  }
+  const { folder = 'exercises/videos', resource_type = 'video' } = req.body;
+  const timestamp = Math.round(Date.now() / 1000);
+  const paramsToSign = { folder, timestamp };
+  const signature = cloudinary.utils.api_sign_request(paramsToSign, cfg.api_secret);
+  res.json({
+    signature,
+    timestamp,
+    folder,
+    resource_type,
+    api_key: cfg.api_key,
+    cloud_name: cfg.cloud_name,
+  });
+});
+
 /**
  * Upload a file to Cloudinary.
  * Supports both temp-file mode (local dev) and in-memory buffer mode (Vercel).
@@ -103,7 +125,12 @@ router.get('/:id', async (req, res) => {
 // POST /api/exercises - trainer or admin uploads
 router.post('/', protect, trainerOrAdmin, async (req, res) => {
   try {
-    let imageUrl = '', videoUrl = '', videoPublicId = '';
+    // Support two paths:
+    //  A) File uploaded via multipart (small image) → upload to Cloudinary here
+    //  B) File already uploaded directly by browser → just use the URL passed in body
+    let imageUrl = req.body.imageUrl || '';
+    let videoUrl = req.body.uploadedVideoUrl || '';
+    let videoPublicId = req.body.uploadedVideoPublicId || '';
 
     if (req.files?.image) {
       const result = await uploadToCloudinary(req.files.image, { folder: 'exercises' });
@@ -145,7 +172,10 @@ router.put('/:id', protect, trainerOrAdmin, async (req, res) => {
     const ex = await Exercise.findById(req.params.id);
     if (!ex) return res.status(404).json({ message: 'Exercise not found' });
 
-    let imageUrl = ex.image, videoUrl = ex.video, videoPublicId = ex.videoPublicId;
+    // Support browser-direct upload path: body fields take precedence over file uploads
+    let imageUrl = req.body.imageUrl || ex.image;
+    let videoUrl = req.body.uploadedVideoUrl || ex.video;
+    let videoPublicId = req.body.uploadedVideoPublicId || ex.videoPublicId;
 
     if (req.files?.image) {
       const result = await uploadToCloudinary(req.files.image, { folder: 'exercises' });
