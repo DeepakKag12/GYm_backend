@@ -7,8 +7,32 @@ const path = require('path');
 
 const app = express();
 
-// Middleware
-app.use(cors({ origin: '*', credentials: true }));
+// ── CORS ──────────────────────────────────────────────────────────────────────
+// credentials:true is incompatible with origin:'*' (CORS spec §3.2).
+// Use a whitelist instead; if you genuinely need a fully public API drop
+// credentials:true and keep origin:'*'.
+const allowedOrigins = (process.env.ALLOWED_ORIGINS || '')
+  .split(',')
+  .map(s => s.trim())
+  .filter(Boolean);
+
+const corsOptions = {
+  origin: function (origin, callback) {
+    // Allow server-to-server requests (no origin) and listed origins
+    if (!origin || allowedOrigins.length === 0 || allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
+  credentials: true,
+  optionsSuccessStatus: 204,
+};
+
+app.use(cors(corsOptions));
+// Make sure preflight OPTIONS is handled for every route
+app.options('*', cors(corsOptions));
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 // On Vercel serverless use in-memory buffers (no /tmp/ write); locally use temp files
@@ -16,6 +40,7 @@ app.use(fileUpload({
   useTempFiles: process.env.VERCEL !== '1',
   tempFileDir: '/tmp/',
   limits: { fileSize: 100 * 1024 * 1024 }, // 100 MB
+  abortOnLimit: false,
 }));
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
@@ -43,6 +68,16 @@ app.use('/api/splits',       require('./routes/splits'));
 // Return JSON 404 for any unmatched /api/* routes (prevents HTML 404 confusing the frontend)
 app.use('/api/*', (req, res) => {
   res.status(404).json({ message: `API route not found: ${req.originalUrl}` });
+});
+
+// Global error handler — must have 4 params so Express treats it as error middleware.
+// Ensures CORS headers are already set (by the cors() middleware above) before we reach here,
+// so the browser always receives Access-Control-Allow-Origin even on 500 responses.
+// eslint-disable-next-line no-unused-vars
+app.use((err, req, res, next) => {
+  console.error(err);
+  const status = err.status || err.statusCode || 500;
+  res.status(status).json({ message: err.message || 'Internal server error' });
 });
 
 // Start cron jobs for fee reminders — skip in serverless (Vercel) environment

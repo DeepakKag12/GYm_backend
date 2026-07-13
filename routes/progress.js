@@ -3,7 +3,16 @@ const router = express.Router();
 const ProgressEntry = require('../models/ProgressEntry');
 const { protect, adminOnly, trainerOrAdmin } = require('../middleware/auth');
 const cloudinary = require('../config/cloudinary');
-const fs = require('fs');
+
+/** Upload to Cloudinary — buffer-safe (Vercel) + auto image compression */
+async function uploadPhoto(file) {
+  const opts = { folder: 'progress', quality: 'auto', fetch_format: 'auto' };
+  if (file.tempFilePath) return cloudinary.uploader.upload(file.tempFilePath, opts);
+  return new Promise((resolve, reject) => {
+    const stream = cloudinary.uploader.upload_stream(opts, (err, r) => err ? reject(err) : resolve(r));
+    stream.end(file.data);
+  });
+}
 
 // GET /api/progress/me  - member sees own entries
 router.get('/me', protect, async (req, res) => {
@@ -27,9 +36,8 @@ router.post('/', protect, async (req, res) => {
     const { date, weight, bodyFat, chest, waist, hips, arms, thighs, notes } = req.body;
     let photoUrl = '';
     if (req.files?.photo) {
-      const result = await cloudinary.uploader.upload(req.files.photo.tempFilePath, { folder: 'progress' });
+      const result = await uploadPhoto(req.files.photo);
       photoUrl = result.secure_url;
-      fs.unlinkSync(req.files.photo.tempFilePath);
     }
     const entry = await ProgressEntry.create({
       member: req.user._id, date, weight, bodyFat, chest, waist, hips, arms, thighs, notes, photo: photoUrl

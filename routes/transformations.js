@@ -69,6 +69,40 @@ router.post('/', protect, trainerOrAdmin, async (req, res) => {
   }
 });
 
+// PUT /api/transformations/:id
+router.put('/:id', protect, trainerOrAdmin, async (req, res) => {
+  try {
+    const t = await Transformation.findById(req.params.id);
+    if (!t) return res.status(404).json({ message: 'Not found' });
+
+    let beforeImage = t.beforeImage;
+    let afterImage  = t.afterImage;
+
+    if (req.files?.beforeImage) {
+      const r = await uploadImage(req.files.beforeImage, 'transformations');
+      beforeImage = r.secure_url;
+    }
+    if (req.files?.afterImage) {
+      const r = await uploadImage(req.files.afterImage, 'transformations');
+      afterImage = r.secure_url;
+    }
+
+    const updated = await Transformation.findByIdAndUpdate(
+      req.params.id,
+      {
+        ...req.body,
+        beforeImage,
+        afterImage,
+        isPublic: req.body.isPublic === 'false' ? false : req.body.isPublic === 'true' ? true : t.isPublic,
+      },
+      { new: true }
+    );
+    res.json(updated);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
 // DELETE /api/transformations/:id
 router.delete('/:id', protect, trainerOrAdmin, async (req, res) => {
   try {

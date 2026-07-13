@@ -4,6 +4,23 @@ const DietPlan = require('../models/DietPlan');
 const cloudinary = require('../config/cloudinary');
 const { protect, trainerOrAdmin } = require('../middleware/auth');
 
+/** Upload to Cloudinary — buffer-safe (Vercel) + auto image compression */
+async function uploadImage(file, folder = 'diet') {
+  const cfg = cloudinary.config();
+  if (!cfg.cloud_name || !cfg.api_key || !cfg.api_secret) {
+    throw new Error(
+      'Cloudinary is not configured. Add CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, ' +
+      'CLOUDINARY_API_SECRET to your Vercel environment variables and redeploy.'
+    );
+  }
+  const opts = { folder, quality: 'auto', fetch_format: 'auto' };
+  if (file.tempFilePath) return cloudinary.uploader.upload(file.tempFilePath, opts);
+  return new Promise((resolve, reject) => {
+    const stream = cloudinary.uploader.upload_stream(opts, (err, r) => err ? reject(err) : resolve(r));
+    stream.end(file.data);
+  });
+}
+
 // GET /api/diet
 router.get('/', async (req, res) => {
   try {
@@ -57,7 +74,7 @@ router.post('/', protect, trainerOrAdmin, async (req, res) => {
   try {
     let imageUrl = '';
     if (req.files?.image) {
-      const result = await cloudinary.uploader.upload(req.files.image.tempFilePath, { folder: 'diet' });
+      const result = await uploadImage(req.files.image, 'diet');
       imageUrl = result.secure_url;
     }
     const meals = req.body.meals ? JSON.parse(req.body.meals) : [];
