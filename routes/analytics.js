@@ -23,7 +23,7 @@ function monthStart(offsetFromNow = 0) {
 // ─── GET /api/analytics/summary ─────────────────────────────────────────────
 router.get('/summary', protect, adminOnly, async (req, res) => {
   try {
-    const data = await cache.getOrSet('analytics:summary', 120, async () => {
+    const data = await cache.getOrSet('analytics:summary', 30, async () => {
       const now = new Date();
       const thisMonthStart = monthStart(0);
       const lastMonthStart = monthStart(-1);
@@ -95,6 +95,7 @@ router.get('/summary', protect, adminOnly, async (req, res) => {
         pendingFeeCount,
       };
     });
+    res.set('Cache-Control', 'no-store');
     res.json(data);
   } catch (err) { res.status(500).json({ message: err.message }); }
 });
@@ -102,7 +103,7 @@ router.get('/summary', protect, adminOnly, async (req, res) => {
 // ─── GET /api/analytics/revenue-monthly ─────────────────────────────────────
 router.get('/revenue-monthly', protect, adminOnly, async (req, res) => {
   try {
-    const data = await cache.getOrSet('analytics:revenue-monthly', 180, async () => {
+    const data = await cache.getOrSet('analytics:revenue-monthly', 30, async () => {
       const sixMonthsAgo = monthStart(-5);
       return Order.aggregate([
         { $match: { createdAt: { $gte: sixMonthsAgo }, paymentStatus: 'paid' } },
@@ -115,6 +116,7 @@ router.get('/revenue-monthly', protect, adminOnly, async (req, res) => {
         { $sort: { '_id.year': 1, '_id.month': 1 } },
       ]);
     });
+    res.set('Cache-Control', 'no-store');
     res.json(data);
   } catch (err) { res.status(500).json({ message: err.message }); }
 });
@@ -122,12 +124,13 @@ router.get('/revenue-monthly', protect, adminOnly, async (req, res) => {
 // ─── GET /api/analytics/membership-stats ────────────────────────────────────
 router.get('/membership-stats', protect, adminOnly, async (req, res) => {
   try {
-    const data = await cache.getOrSet('analytics:membership-stats', 180, () =>
+    const data = await cache.getOrSet('analytics:membership-stats', 30, () =>
       User.aggregate([
         { $match: { role: 'member' } },
         { $group: { _id: '$membershipPlan', count: { $sum: 1 }, revenue: { $sum: '$feeAmount' } } },
       ])
     );
+    res.set('Cache-Control', 'no-store');
     res.json(data);
   } catch (err) { res.status(500).json({ message: err.message }); }
 });
@@ -135,7 +138,7 @@ router.get('/membership-stats', protect, adminOnly, async (req, res) => {
 // ─── GET /api/analytics/new-members-monthly ─────────────────────────────────
 router.get('/new-members-monthly', protect, adminOnly, async (req, res) => {
   try {
-    const data = await cache.getOrSet('analytics:new-members-monthly', 180, async () => {
+    const data = await cache.getOrSet('analytics:new-members-monthly', 30, async () => {
       const sixMonthsAgo = monthStart(-5);
       return User.aggregate([
         { $match: { role: 'member', createdAt: { $gte: sixMonthsAgo } } },
@@ -148,6 +151,7 @@ router.get('/new-members-monthly', protect, adminOnly, async (req, res) => {
         { $sort: { '_id.year': 1, '_id.month': 1 } },
       ]);
     });
+    res.set('Cache-Control', 'no-store');
     res.json(data);
   } catch (err) { res.status(500).json({ message: err.message }); }
 });
@@ -156,7 +160,7 @@ router.get('/new-members-monthly', protect, adminOnly, async (req, res) => {
 // Comprehensive revenue breakdown: membership fees + store orders, by month (12 months)
 router.get('/revenue-full', protect, adminOnly, async (req, res) => {
   try {
-    const data = await cache.getOrSet('analytics:revenue-full', 180, async () => {
+    const data = await cache.getOrSet('analytics:revenue-full', 30, async () => {
     const twelveMonthsAgo = monthStart(-11);
     const now = new Date();
 
@@ -262,6 +266,7 @@ router.get('/revenue-full', protect, adminOnly, async (req, res) => {
       },
     };
     }); // end cache.getOrSet
+    res.set('Cache-Control', 'no-store');
     res.json(data);
   } catch (err) { res.status(500).json({ message: err.message }); }
 });
