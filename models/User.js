@@ -12,6 +12,7 @@ const userSchema = new mongoose.Schema({
   dob:          { type: Date },
   gender:       { type: String, enum: ['male', 'female', 'other'] },
   // Membership fields
+  specialization: { type: String, default: '' },  // for trainers
   membershipPlan: { type: String, enum: ['monthly', 'quarterly', 'half-yearly', 'yearly'], default: 'monthly' },
   membershipStart: { type: Date },
   membershipEnd:   { type: Date },

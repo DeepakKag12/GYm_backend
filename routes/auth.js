@@ -41,6 +41,27 @@ router.get('/me', protect, (req, res) => {
   res.json(req.user);
 });
 
+// PUT /api/auth/update-profile — any authenticated user updates their own profile fields
+router.put('/update-profile', protect, async (req, res) => {
+  try {
+    const { name, phone, whatsapp, address, dob, gender } = req.body;
+    const updates = {};
+    if (name    !== undefined) updates.name    = name.trim();
+    if (phone   !== undefined) updates.phone   = phone;
+    if (whatsapp!== undefined) updates.whatsapp= whatsapp;
+    if (address !== undefined) updates.address = address;
+    if (dob     !== undefined) updates.dob     = dob || null;
+    if (gender  !== undefined) updates.gender  = gender;
+
+    const updated = await User.findByIdAndUpdate(
+      req.user._id, updates, { new: true }
+    ).select('-password');
+    res.json({ message: 'Profile updated successfully', user: updated });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
 // PUT /api/auth/update-credentials
 router.put('/update-credentials', protect, async (req, res) => {
   try {
