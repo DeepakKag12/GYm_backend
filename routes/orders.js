@@ -46,10 +46,10 @@ router.get('/', protect, adminOnly, async (req, res) => {
 // PUT /api/orders/:id/status - Admin updates status
 router.put('/:id/status', protect, adminOnly, async (req, res) => {
   try {
-    const order = await Order.findByIdAndUpdate(req.params.id, {
-      orderStatus: req.body.orderStatus,
-      ...(req.body.paymentStatus && { paymentStatus: req.body.paymentStatus }),
-    }, { new: true });
+    const update = {};
+    if (req.body.orderStatus  !== undefined) update.orderStatus  = req.body.orderStatus;
+    if (req.body.paymentStatus !== undefined) update.paymentStatus = req.body.paymentStatus;
+    const order = await Order.findByIdAndUpdate(req.params.id, update, { new: true });
     cache.delPattern('analytics:');
     cache.del('orders:admin');
     // Bust the individual member's order cache too
