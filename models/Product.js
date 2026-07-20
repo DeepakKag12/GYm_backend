@@ -9,6 +9,7 @@ const productSchema = new mongoose.Schema({
   discountPrice: { type: Number },
   stock:       { type: Number, default: 0 },
   images:      [{ type: String }],
+  video:       { type: String },   // Cloudinary mp4 URL or YouTube link
   flavors:     [{ type: String }],
   weights:     [{ type: String }],   // e.g. ["1kg", "2kg", "5kg"]
   rating:      { type: Number, default: 0 },
