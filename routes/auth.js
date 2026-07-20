@@ -3,18 +3,20 @@ const router = express.Router();
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
+const cache = require('../utils/cache');
 
 const signToken = (id) => jwt.sign({ id }, process.env.JWT_SECRET, { expiresIn: '30d' });
 
 // POST /api/auth/register
+// role is intentionally ignored — public registration always creates a member
 router.post('/register', async (req, res) => {
   try {
-    const { name, email, phone, password, role } = req.body;
+    const { name, email, phone, password } = req.body;
     const exists = await User.findOne({ email });
     if (exists) return res.status(400).json({ message: 'Email already registered' });
 
     const hashed = await bcrypt.hash(password, 10);
-    const user = await User.create({ name, email, phone, password: hashed, role: role || 'member' });
+    const user = await User.create({ name, email, phone, password: hashed, role: 'member' });
     res.status(201).json({ token: signToken(user._id), user: { ...user._doc, password: undefined } });
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -56,6 +58,8 @@ router.put('/update-profile', protect, async (req, res) => {
     const updated = await User.findByIdAndUpdate(
       req.user._id, updates, { new: true }
     ).select('-password');
+    // Bust the cached user so the protect middleware picks up fresh data
+    cache.del(`user:${req.user._id}`);
     res.json({ message: 'Profile updated successfully', user: updated });
   } catch (err) {
     res.status(500).json({ message: err.message });

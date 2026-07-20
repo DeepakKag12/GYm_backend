@@ -28,15 +28,34 @@ router.get('/summary', protect, adminOnly, async (req, res) => {
       const thisMonthStart = monthStart(0);
       const lastMonthStart = monthStart(-1);
 
-      const [totalMembers, activeMembers, expiredMembers, pendingMembers, orders, totalExercises, totalDietPlans, totalTrainers] = await Promise.all([
+      const [
+        totalMembers, activeMembers, expiredMembers, pendingMembers,
+        totalOrders, totalExercises, totalDietPlans, totalTrainers,
+        revenueAgg, monthlyRevenueAgg, lastMonthRevenueAgg,
+      ] = await Promise.all([
         User.countDocuments({ role: 'member' }),
         User.countDocuments({ role: 'member', membershipStatus: 'active' }),
         User.countDocuments({ role: 'member', membershipStatus: 'expired' }),
         User.countDocuments({ role: 'member', membershipStatus: 'pending' }),
-        Order.find({}).lean(),
+        Order.countDocuments({}),
         Exercise.countDocuments({}),
         DietPlan.countDocuments({}),
         User.countDocuments({ role: 'trainer' }),
+        // Total revenue from all paid orders
+        Order.aggregate([
+          { $match: { paymentStatus: 'paid' } },
+          { $group: { _id: null, total: { $sum: '$totalAmount' } } },
+        ]),
+        // This month revenue
+        Order.aggregate([
+          { $match: { paymentStatus: 'paid', createdAt: { $gte: thisMonthStart } } },
+          { $group: { _id: null, total: { $sum: '$totalAmount' } } },
+        ]),
+        // Last month revenue
+        Order.aggregate([
+          { $match: { paymentStatus: 'paid', createdAt: { $gte: lastMonthStart, $lt: thisMonthStart } } },
+          { $group: { _id: null, total: { $sum: '$totalAmount' } } },
+        ]),
       ]);
 
       const expiringIn7 = await User.countDocuments({
@@ -44,14 +63,9 @@ router.get('/summary', protect, adminOnly, async (req, res) => {
         membershipEnd: { $gte: now, $lte: new Date(now.getTime() + 7 * 86400000) },
       });
 
-      const paidOrders      = orders.filter(o => o.paymentStatus === 'paid');
-      const revenue         = paidOrders.reduce((s, o) => s + (o.totalAmount || 0), 0);
-      const monthlyRevenue  = paidOrders.filter(o => new Date(o.createdAt) >= thisMonthStart)
-                                        .reduce((s, o) => s + (o.totalAmount || 0), 0);
-      const lastMonthRevenue = paidOrders.filter(o => {
-        const d = new Date(o.createdAt);
-        return d >= lastMonthStart && d < thisMonthStart;
-      }).reduce((s, o) => s + (o.totalAmount || 0), 0);
+      const revenue          = revenueAgg[0]?.total          || 0;
+      const monthlyRevenue   = monthlyRevenueAgg[0]?.total   || 0;
+      const lastMonthRevenue = lastMonthRevenueAgg[0]?.total || 0;
 
       const membershipFeeRevenue = await User.aggregate([
         { $match: { role: 'member', feePaid: true } },
@@ -69,7 +83,7 @@ router.get('/summary', protect, adminOnly, async (req, res) => {
       return {
         totalMembers, activeMembers, expiredMembers, pendingMembers,
         expiringIn7,
-        totalOrders: orders.length,
+        totalOrders,
         totalExercises,
         totalDietPlans,
         totalTrainers,

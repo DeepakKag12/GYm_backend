@@ -136,31 +136,8 @@ router.delete('/:id', protect, adminOnly, async (req, res) => {
   } catch (err) { res.status(500).json({ message: err.message }); }
 });
 
-// POST /api/members/:id/send-notification — Manual WhatsApp + website notification
-router.post('/:id/send-notification', protect, adminOnly, async (req, res) => {
-  try {
-    const { title, message, sendWhatsApp: doWA } = req.body;
-    const member = await User.findById(req.params.id);
-    if (!member) return res.status(404).json({ message: 'Member not found' });
-
-    const notif = await Notification.create({
-      member: member._id, type: 'general', title, message, sentVia: ['website']
-    });
-
-    const waNum = member.whatsapp || member.phone;
-    if (doWA && waNum) {
-      const waMsg = `*FITNATION BY AJEET*\n\n*${title}*\n\n${message}\n\n_Powered by FitNation_`;
-      const waSent = await sendWhatsApp(waNum, waMsg);
-      if (waSent) {
-        notif.sentVia.push('whatsapp');
-        await notif.save();
-      }
-    }
-    res.json({ message: 'Notification sent', notif });
-  } catch (err) { res.status(500).json({ message: err.message }); }
-});
-
 // POST /api/members/bulk-reminder — Send reminder to all expiring members
+// NOTE: must be defined BEFORE /:id routes so Express doesn't treat "bulk-reminder" as an :id
 router.post('/bulk-reminder', protect, adminOnly, async (req, res) => {
   try {
     const { days = 7, customMessage } = req.body;
@@ -194,6 +171,30 @@ router.post('/bulk-reminder', protect, adminOnly, async (req, res) => {
       sent++;
     }
     res.json({ message: `Reminder sent to ${sent} member(s)`, count: sent });
+  } catch (err) { res.status(500).json({ message: err.message }); }
+});
+
+// POST /api/members/:id/send-notification — Manual WhatsApp + website notification
+router.post('/:id/send-notification', protect, adminOnly, async (req, res) => {
+  try {
+    const { title, message, sendWhatsApp: doWA } = req.body;
+    const member = await User.findById(req.params.id);
+    if (!member) return res.status(404).json({ message: 'Member not found' });
+
+    const notif = await Notification.create({
+      member: member._id, type: 'general', title, message, sentVia: ['website']
+    });
+
+    const waNum = member.whatsapp || member.phone;
+    if (doWA && waNum) {
+      const waMsg = `*FITNATION BY AJEET*\n\n*${title}*\n\n${message}\n\n_Powered by FitNation_`;
+      const waSent = await sendWhatsApp(waNum, waMsg);
+      if (waSent) {
+        notif.sentVia.push('whatsapp');
+        await notif.save();
+      }
+    }
+    res.json({ message: 'Notification sent', notif });
   } catch (err) { res.status(500).json({ message: err.message }); }
 });
 

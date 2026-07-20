@@ -23,11 +23,18 @@ router.get('/', async (req, res) => {
 router.post('/', protect, adminOnly, async (req, res) => {
   try {
     const bcrypt = require('bcryptjs');
-    const { name, email, phone, password, specialization, bio } = req.body;
+    const { name, email, phone, password, specialization, gender, isActive } = req.body;
     const exists = await User.findOne({ email });
     if (exists) return res.status(400).json({ message: 'Email already registered' });
     const hashed = await bcrypt.hash(password || phone, 10);
-    const trainer = await User.create({ name, email, phone, password: hashed, role: 'trainer', address: bio });
+    const trainer = await User.create({
+      name, email, phone,
+      password: hashed,
+      role: 'trainer',
+      specialization: specialization || '',
+      gender: gender || '',
+      isActive: isActive !== undefined ? isActive : true,
+    });
     cache.del(TRAINERS_CACHE_KEY);
     res.status(201).json(trainer);
   } catch (err) {
@@ -38,8 +45,11 @@ router.post('/', protect, adminOnly, async (req, res) => {
 // PUT /api/trainers/:id - admin edits trainer
 router.put('/:id', protect, adminOnly, async (req, res) => {
   try {
-    const { name, email, phone, password } = req.body;
+    const { name, email, phone, password, specialization, gender, isActive } = req.body;
     const update = { name, email, phone };
+    if (specialization !== undefined) update.specialization = specialization;
+    if (gender        !== undefined) update.gender         = gender;
+    if (isActive      !== undefined) update.isActive       = isActive;
     if (password) {
       const bcrypt = require('bcryptjs');
       update.password = await bcrypt.hash(password, 10);
