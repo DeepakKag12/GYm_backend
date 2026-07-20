@@ -41,14 +41,17 @@ cron.schedule('0 9 * * *', async () => {
     }
 
     if (shouldNotify) {
-      const sentVia = ['website'];
-      // Save website notification
-      await Notification.create({ member: member._id, type: notifType, title, message, sentVia });
+      // Save website notification first
+      const notif = await Notification.create({ member: member._id, type: notifType, title, message, sentVia: ['website'] });
 
-      // WhatsApp notification
-      if (member.whatsapp) {
-        const sent = await sendWhatsApp(member.whatsapp, `*FitnessByAjeet*\n\n${message}`);
-        if (sent) sentVia.push('whatsapp');
+      // WhatsApp notification — fall back to phone if whatsapp field is empty
+      const waNum = member.whatsapp || member.phone;
+      if (waNum) {
+        const sent = await sendWhatsApp(waNum, `*FitnessByAjeet*\n\n${message}`);
+        if (sent) {
+          notif.sentVia.push('whatsapp');
+          await notif.save();
+        }
       }
       await member.save();
       console.log(`✅ Reminder sent to ${member.name} (${daysLeft} days left)`);

@@ -147,11 +147,14 @@ router.post('/:id/send-notification', protect, adminOnly, async (req, res) => {
       member: member._id, type: 'general', title, message, sentVia: ['website']
     });
 
-    if (doWA && member.whatsapp) {
+    const waNum = member.whatsapp || member.phone;
+    if (doWA && waNum) {
       const waMsg = `*FITNATION BY AJEET*\n\n*${title}*\n\n${message}\n\n_Powered by FitNation_`;
-      await sendWhatsApp(member.whatsapp, waMsg);
-      notif.sentVia.push('whatsapp');
-      await notif.save();
+      const waSent = await sendWhatsApp(waNum, waMsg);
+      if (waSent) {
+        notif.sentVia.push('whatsapp');
+        await notif.save();
+      }
     }
     res.json({ message: 'Notification sent', notif });
   } catch (err) { res.status(500).json({ message: err.message }); }
@@ -184,8 +187,9 @@ router.post('/bulk-reminder', protect, adminOnly, async (req, res) => {
         sentVia: ['website'],
       });
 
-      if (member.whatsapp) {
-        await sendWhatsApp(member.whatsapp, `*FITNATION BY AJEET*\n\n${msg}`);
+      const waNum = member.whatsapp || member.phone;
+      if (waNum) {
+        await sendWhatsApp(waNum, `*FITNATION BY AJEET*\n\n${msg}`);
       }
       sent++;
     }

@@ -147,6 +147,7 @@ app.use('/api/analytics',    require('./routes/analytics'));
 app.use('/api/progress',     require('./routes/progress'));
 app.use('/api/plans',        require('./routes/plans'));
 app.use('/api/splits',       require('./routes/splits'));
+app.use('/api/cron',         require('./routes/cron'));
 
 // ── Cache stats health endpoint ────────────────────────────────────────────────
 app.get('/api/_cache/stats', (req, res) => {
