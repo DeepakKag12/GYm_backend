@@ -53,7 +53,17 @@ const sendWhatsApp = async (to, message) => {
     console.log(`✅ WhatsApp sent to ${formattedTo}`);
     return true;
   } catch (err) {
-    console.error(`❌ WhatsApp error for ${formattedTo}:`, err.message);
+    // Log the full Twilio error code so it's easy to diagnose
+    console.error(`❌ WhatsApp error for ${formattedTo}: [${err.code}] ${err.message}`);
+    if (err.code === 63007 || err.code === 21211) {
+      console.error('   ↳ Invalid "to" number — check that the member phone is in E.164 format (+91XXXXXXXXXX)');
+    } else if (err.code === 63016) {
+      console.error('   ↳ Sandbox: user has NOT joined — they must WhatsApp "join <your-keyword>" to +14155238886 first');
+    } else if (err.code === 20003) {
+      console.error('   ↳ Twilio credentials are wrong — check TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN');
+    } else if (err.code === 21608) {
+      console.error('   ↳ The "from" number is not enabled for WhatsApp — check TWILIO_WHATSAPP_FROM');
+    }
     return false;
   }
 };

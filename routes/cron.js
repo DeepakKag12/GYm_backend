@@ -14,6 +14,24 @@ const User = require('../models/User');
 const Notification = require('../models/Notification');
 const { sendWhatsApp } = require('../utils/whatsapp');
 
+// GET /api/cron/test-whatsapp?to=91XXXXXXXXXX — admin quick test (only works when CRON_SECRET matches)
+router.get('/test-whatsapp', async (req, res) => {
+  const secret = process.env.CRON_SECRET;
+  if (secret) {
+    const auth = req.headers['authorization'] || '';
+    if (auth !== `Bearer ${secret}`) {
+      return res.status(401).json({ message: 'Unauthorized — pass Authorization: Bearer <CRON_SECRET>' });
+    }
+  }
+
+  const { to } = req.query;
+  if (!to) return res.status(400).json({ message: 'Pass ?to=91XXXXXXXXXX in the URL' });
+
+  const { sendWhatsApp } = require('../utils/whatsapp');
+  const sent = await sendWhatsApp(to, '*FITNATION BY AJEET*\n\nThis is a test message from your gym app. ✅');
+  res.json({ sent, to, message: sent ? 'WhatsApp delivered!' : 'Failed — check server logs for the exact Twilio error code' });
+});
+
 router.get('/fee-reminder', async (req, res) => {
   // Verify secret so random people can't spam-trigger reminders
   const secret = process.env.CRON_SECRET;
