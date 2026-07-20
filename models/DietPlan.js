@@ -18,4 +18,8 @@ const dietPlanSchema = new mongoose.Schema({
   uploadedBy:     { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
 }, { timestamps: true });
 
+// ── Performance indexes ────────────────────────────────────────────────────────
+dietPlanSchema.index({ isPublic: 1, createdAt: -1 });
+dietPlanSchema.index({ assignedTo: 1 });
+
 module.exports = mongoose.model('DietPlan', dietPlanSchema);

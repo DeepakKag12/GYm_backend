@@ -25,4 +25,9 @@ const exerciseSchema = new mongoose.Schema({
   tags:        [{ type: String }],
 }, { timestamps: true });
 
+// ── Performance indexes ────────────────────────────────────────────────────────
+exerciseSchema.index({ isPublic: 1, muscleGroup: 1, createdAt: -1 });
+exerciseSchema.index({ assignedTo: 1 });
+exerciseSchema.index({ uploadedBy: 1 });
+
 module.exports = mongoose.model('Exercise', exerciseSchema);

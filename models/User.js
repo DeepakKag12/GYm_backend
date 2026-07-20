@@ -26,4 +26,11 @@ const userSchema = new mongoose.Schema({
   isActive: { type: Boolean, default: true },
 }, { timestamps: true });
 
+// ── Performance indexes ────────────────────────────────────────────────────────
+userSchema.index({ role: 1, membershipStatus: 1 });
+userSchema.index({ role: 1, membershipEnd: 1 });
+userSchema.index({ role: 1, feePaid: 1 });
+userSchema.index({ role: 1, createdAt: -1 });
+userSchema.index({ assignedTrainer: 1 });
+
 module.exports = mongoose.model('User', userSchema);

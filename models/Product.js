@@ -24,4 +24,9 @@ const productSchema = new mongoose.Schema({
   isActive:    { type: Boolean, default: true },
 }, { timestamps: true });
 
+// ── Performance indexes ────────────────────────────────────────────────────────
+productSchema.index({ isActive: 1, category: 1, createdAt: -1 });
+productSchema.index({ isActive: 1, isFeatured: 1 });
+productSchema.index({ name: 'text', description: 'text' }); // text-search support
+
 module.exports = mongoose.model('Product', productSchema);

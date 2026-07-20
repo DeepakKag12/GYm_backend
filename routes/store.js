@@ -3,6 +3,7 @@ const router = express.Router();
 const Product = require('../models/Product');
 const cloudinary = require('../config/cloudinary');
 const { protect, adminOnly } = require('../middleware/auth');
+const cache = require('../utils/cache');
 
 /** Upload to Cloudinary — buffer-safe (Vercel) + auto image compression */
 async function uploadImage(file, folder = 'store') {
@@ -24,11 +25,16 @@ async function uploadImage(file, folder = 'store') {
 // GET /api/store?category=protein
 router.get('/', async (req, res) => {
   try {
-    let query = { isActive: true };
-    if (req.query.category) query.category = req.query.category;
-    if (req.query.featured) query.isFeatured = true;
-    if (req.query.search) query.name = { $regex: req.query.search, $options: 'i' };
-    const products = await Product.find(query).sort({ createdAt: -1 });
+    const { category, featured, search } = req.query;
+    const cacheKey = `store:list:${category || ''}:${featured || ''}:${search || ''}`;
+    const products = await cache.getOrSet(cacheKey, 60, async () => {
+      let query = { isActive: true };
+      if (category) query.category = category;
+      if (featured) query.isFeatured = true;
+      if (search) query.name = { $regex: search, $options: 'i' };
+      return Product.find(query).sort({ createdAt: -1 }).lean();
+    });
+    res.set('Cache-Control', 'public, max-age=60, stale-while-revalidate=120');
     res.json(products);
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -38,8 +44,13 @@ router.get('/', async (req, res) => {
 // GET /api/store/:id
 router.get('/:id', async (req, res) => {
   try {
-    const product = await Product.findById(req.params.id).populate('reviews.user', 'name avatar');
+    const cacheKey = `store:item:${req.params.id}`;
+    const product = await cache.getOrSet(cacheKey, 120, async () => {
+      const p = await Product.findById(req.params.id).populate('reviews.user', 'name avatar').lean();
+      return p;
+    });
     if (!product) return res.status(404).json({ message: 'Product not found' });
+    res.set('Cache-Control', 'public, max-age=120, stale-while-revalidate=240');
     res.json(product);
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -63,6 +74,7 @@ router.post('/', protect, adminOnly, async (req, res) => {
       flavors: req.body.flavors ? JSON.parse(req.body.flavors) : [],
       weights: req.body.weights ? JSON.parse(req.body.weights) : [],
     });
+    cache.delPattern('store:list');
     res.status(201).json(product);
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -94,6 +106,8 @@ router.put('/:id', protect, adminOnly, async (req, res) => {
     update.isFeatured = update.isFeatured === 'true' || update.isFeatured === true;
     const product = await Product.findByIdAndUpdate(req.params.id, update, { new: true });
     if (!product) return res.status(404).json({ message: 'Product not found' });
+    cache.del(`store:item:${req.params.id}`);
+    cache.delPattern('store:list');
     res.json(product);
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -104,6 +118,8 @@ router.put('/:id', protect, adminOnly, async (req, res) => {
 router.delete('/:id', protect, adminOnly, async (req, res) => {
   try {
     await Product.findByIdAndDelete(req.params.id);
+    cache.del(`store:item:${req.params.id}`);
+    cache.delPattern('store:list');
     res.json({ message: 'Product deleted' });
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -120,6 +136,8 @@ router.post('/:id/review', protect, async (req, res) => {
     product.reviewCount = product.reviews.length;
     product.rating = product.reviews.reduce((s, r) => s + r.rating, 0) / product.reviews.length;
     await product.save();
+    cache.del(`store:item:${req.params.id}`);
+    cache.delPattern('store:list');
     res.json(product);
   } catch (err) {
     res.status(500).json({ message: err.message });

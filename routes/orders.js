@@ -2,11 +2,14 @@ const express = require('express');
 const router = express.Router();
 const Order = require('../models/Order');
 const { protect, adminOnly } = require('../middleware/auth');
+const cache = require('../utils/cache');
 
 // POST /api/orders - Place order
 router.post('/', protect, async (req, res) => {
   try {
     const order = await Order.create({ ...req.body, user: req.user._id });
+    // Invalidate analytics so revenue numbers stay fresh
+    cache.delPattern('analytics:');
     res.status(201).json(order);
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -36,7 +39,11 @@ router.get('/', protect, adminOnly, async (req, res) => {
 // PUT /api/orders/:id/status - Admin updates status
 router.put('/:id/status', protect, adminOnly, async (req, res) => {
   try {
-    const order = await Order.findByIdAndUpdate(req.params.id, { orderStatus: req.body.orderStatus }, { new: true });
+    const order = await Order.findByIdAndUpdate(req.params.id, {
+      orderStatus: req.body.orderStatus,
+      ...(req.body.paymentStatus && { paymentStatus: req.body.paymentStatus }),
+    }, { new: true });
+    cache.delPattern('analytics:');
     res.json(order);
   } catch (err) {
     res.status(500).json({ message: err.message });

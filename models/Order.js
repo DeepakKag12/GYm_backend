@@ -26,4 +26,8 @@ const orderSchema = new mongoose.Schema({
   notes:        { type: String },
 }, { timestamps: true });
 
+// ── Performance indexes ────────────────────────────────────────────────────────
+orderSchema.index({ user: 1, createdAt: -1 });
+orderSchema.index({ paymentStatus: 1, createdAt: -1 });
+
 module.exports = mongoose.model('Order', orderSchema);

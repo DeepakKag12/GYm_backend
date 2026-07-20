@@ -9,4 +9,8 @@ const notificationSchema = new mongoose.Schema({
   sentVia:  [{ type: String, enum: ['website', 'whatsapp', 'email'] }],
 }, { timestamps: true });
 
+// ── Performance indexes ────────────────────────────────────────────────────────
+notificationSchema.index({ member: 1, createdAt: -1 });
+notificationSchema.index({ member: 1, isRead: 1 });
+
 module.exports = mongoose.model('Notification', notificationSchema);

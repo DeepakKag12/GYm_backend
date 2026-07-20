@@ -3,6 +3,7 @@ const router  = express.Router();
 const User    = require('../models/User');
 const Order   = require('../models/Order');
 const { protect, adminOnly } = require('../middleware/auth');
+const cache   = require('../utils/cache');
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 function monthStart(offsetFromNow = 0) {
@@ -16,77 +17,78 @@ function monthStart(offsetFromNow = 0) {
 // ─── GET /api/analytics/summary ─────────────────────────────────────────────
 router.get('/summary', protect, adminOnly, async (req, res) => {
   try {
-    const now = new Date();
-    const thisMonthStart = monthStart(0);
-    const lastMonthStart = monthStart(-1);
+    const data = await cache.getOrSet('analytics:summary', 120, async () => {
+      const now = new Date();
+      const thisMonthStart = monthStart(0);
+      const lastMonthStart = monthStart(-1);
 
-    const [totalMembers, activeMembers, expiredMembers, pendingMembers, orders] = await Promise.all([
-      User.countDocuments({ role: 'member' }),
-      User.countDocuments({ role: 'member', membershipStatus: 'active' }),
-      User.countDocuments({ role: 'member', membershipStatus: 'expired' }),
-      User.countDocuments({ role: 'member', membershipStatus: 'pending' }),
-      Order.find({}),
-    ]);
+      const [totalMembers, activeMembers, expiredMembers, pendingMembers, orders] = await Promise.all([
+        User.countDocuments({ role: 'member' }),
+        User.countDocuments({ role: 'member', membershipStatus: 'active' }),
+        User.countDocuments({ role: 'member', membershipStatus: 'expired' }),
+        User.countDocuments({ role: 'member', membershipStatus: 'pending' }),
+        Order.find({}).lean(),
+      ]);
 
-    const expiringIn7 = await User.countDocuments({
-      role: 'member',
-      membershipEnd: { $gte: now, $lte: new Date(now.getTime() + 7 * 86400000) },
+      const expiringIn7 = await User.countDocuments({
+        role: 'member',
+        membershipEnd: { $gte: now, $lte: new Date(now.getTime() + 7 * 86400000) },
+      });
+
+      const paidOrders      = orders.filter(o => o.paymentStatus === 'paid');
+      const revenue         = paidOrders.reduce((s, o) => s + (o.totalAmount || 0), 0);
+      const monthlyRevenue  = paidOrders.filter(o => new Date(o.createdAt) >= thisMonthStart)
+                                        .reduce((s, o) => s + (o.totalAmount || 0), 0);
+      const lastMonthRevenue = paidOrders.filter(o => {
+        const d = new Date(o.createdAt);
+        return d >= lastMonthStart && d < thisMonthStart;
+      }).reduce((s, o) => s + (o.totalAmount || 0), 0);
+
+      const membershipFeeRevenue = await User.aggregate([
+        { $match: { role: 'member', feePaid: true } },
+        { $group: { _id: null, total: { $sum: '$feeAmount' } } },
+      ]);
+      const membershipRevenue = membershipFeeRevenue[0]?.total || 0;
+
+      const pendingFeeResult = await User.aggregate([
+        { $match: { role: 'member', feePaid: false, membershipStatus: 'active' } },
+        { $group: { _id: null, total: { $sum: '$feeAmount' }, count: { $sum: 1 } } },
+      ]);
+      const pendingFees     = pendingFeeResult[0]?.total || 0;
+      const pendingFeeCount = pendingFeeResult[0]?.count || 0;
+
+      return {
+        totalMembers, activeMembers, expiredMembers, pendingMembers,
+        expiringIn7,
+        totalOrders: orders.length,
+        revenue,
+        monthlyRevenue,
+        lastMonthRevenue,
+        membershipRevenue,
+        pendingFees,
+        pendingFeeCount,
+      };
     });
-
-    const paidOrders      = orders.filter(o => o.paymentStatus === 'paid');
-    const revenue         = paidOrders.reduce((s, o) => s + (o.totalAmount || 0), 0);
-    const monthlyRevenue  = paidOrders.filter(o => new Date(o.createdAt) >= thisMonthStart)
-                                      .reduce((s, o) => s + (o.totalAmount || 0), 0);
-    const lastMonthRevenue= paidOrders.filter(o => {
-      const d = new Date(o.createdAt);
-      return d >= lastMonthStart && d < thisMonthStart;
-    }).reduce((s, o) => s + (o.totalAmount || 0), 0);
-
-    // Membership fee revenue (sum of feeAmount from active/paid members)
-    const membershipFeeRevenue = await User.aggregate([
-      { $match: { role: 'member', feePaid: true } },
-      { $group: { _id: null, total: { $sum: '$feeAmount' } } },
-    ]);
-    const membershipRevenue = membershipFeeRevenue[0]?.total || 0;
-
-    // Pending fees (members whose fee is not paid but membership active)
-    const pendingFeeResult = await User.aggregate([
-      { $match: { role: 'member', feePaid: false, membershipStatus: 'active' } },
-      { $group: { _id: null, total: { $sum: '$feeAmount' }, count: { $sum: 1 } } },
-    ]);
-    const pendingFees      = pendingFeeResult[0]?.total || 0;
-    const pendingFeeCount  = pendingFeeResult[0]?.count || 0;
-
-    res.json({
-      totalMembers, activeMembers, expiredMembers, pendingMembers,
-      expiringIn7,
-      totalOrders: orders.length,
-      revenue,
-      monthlyRevenue,
-      lastMonthRevenue,
-      membershipRevenue,
-      pendingFees,
-      pendingFeeCount,
-    });
+    res.json(data);
   } catch (err) { res.status(500).json({ message: err.message }); }
 });
 
 // ─── GET /api/analytics/revenue-monthly ─────────────────────────────────────
 router.get('/revenue-monthly', protect, adminOnly, async (req, res) => {
   try {
-    const sixMonthsAgo = monthStart(-5);
-
-    const data = await Order.aggregate([
-      { $match: { createdAt: { $gte: sixMonthsAgo }, paymentStatus: 'paid' } },
-      { $group: {
-          _id:     { year: { $year: '$createdAt' }, month: { $month: '$createdAt' } },
-          revenue: { $sum: '$totalAmount' },
-          orders:  { $sum: 1 },
+    const data = await cache.getOrSet('analytics:revenue-monthly', 180, async () => {
+      const sixMonthsAgo = monthStart(-5);
+      return Order.aggregate([
+        { $match: { createdAt: { $gte: sixMonthsAgo }, paymentStatus: 'paid' } },
+        { $group: {
+            _id:     { year: { $year: '$createdAt' }, month: { $month: '$createdAt' } },
+            revenue: { $sum: '$totalAmount' },
+            orders:  { $sum: 1 },
+          },
         },
-      },
-      { $sort: { '_id.year': 1, '_id.month': 1 } },
-    ]);
-
+        { $sort: { '_id.year': 1, '_id.month': 1 } },
+      ]);
+    });
     res.json(data);
   } catch (err) { res.status(500).json({ message: err.message }); }
 });
@@ -94,10 +96,12 @@ router.get('/revenue-monthly', protect, adminOnly, async (req, res) => {
 // ─── GET /api/analytics/membership-stats ────────────────────────────────────
 router.get('/membership-stats', protect, adminOnly, async (req, res) => {
   try {
-    const data = await User.aggregate([
-      { $match: { role: 'member' } },
-      { $group: { _id: '$membershipPlan', count: { $sum: 1 }, revenue: { $sum: '$feeAmount' } } },
-    ]);
+    const data = await cache.getOrSet('analytics:membership-stats', 180, () =>
+      User.aggregate([
+        { $match: { role: 'member' } },
+        { $group: { _id: '$membershipPlan', count: { $sum: 1 }, revenue: { $sum: '$feeAmount' } } },
+      ])
+    );
     res.json(data);
   } catch (err) { res.status(500).json({ message: err.message }); }
 });
@@ -105,18 +109,19 @@ router.get('/membership-stats', protect, adminOnly, async (req, res) => {
 // ─── GET /api/analytics/new-members-monthly ─────────────────────────────────
 router.get('/new-members-monthly', protect, adminOnly, async (req, res) => {
   try {
-    const sixMonthsAgo = monthStart(-5);
-
-    const data = await User.aggregate([
-      { $match: { role: 'member', createdAt: { $gte: sixMonthsAgo } } },
-      { $group: {
-          _id:   { year: { $year: '$createdAt' }, month: { $month: '$createdAt' } },
-          count: { $sum: 1 },
-          fees:  { $sum: '$feeAmount' },
+    const data = await cache.getOrSet('analytics:new-members-monthly', 180, async () => {
+      const sixMonthsAgo = monthStart(-5);
+      return User.aggregate([
+        { $match: { role: 'member', createdAt: { $gte: sixMonthsAgo } } },
+        { $group: {
+            _id:   { year: { $year: '$createdAt' }, month: { $month: '$createdAt' } },
+            count: { $sum: 1 },
+            fees:  { $sum: '$feeAmount' },
+          },
         },
-      },
-      { $sort: { '_id.year': 1, '_id.month': 1 } },
-    ]);
+        { $sort: { '_id.year': 1, '_id.month': 1 } },
+      ]);
+    });
     res.json(data);
   } catch (err) { res.status(500).json({ message: err.message }); }
 });
@@ -125,6 +130,7 @@ router.get('/new-members-monthly', protect, adminOnly, async (req, res) => {
 // Comprehensive revenue breakdown: membership fees + store orders, by month (12 months)
 router.get('/revenue-full', protect, adminOnly, async (req, res) => {
   try {
+    const data = await cache.getOrSet('analytics:revenue-full', 180, async () => {
     const twelveMonthsAgo = monthStart(-11);
     const now = new Date();
 
@@ -215,7 +221,7 @@ router.get('/revenue-full', protect, adminOnly, async (req, res) => {
     const totalStoreRevenue      = paymentMethodBreakdown.reduce((s, p) => s + p.revenue, 0);
     const totalPendingFees       = pendingFeeMembers.reduce((s, m) => s + (m.feeAmount || 0), 0);
 
-    res.json({
+    return {
       months,
       planBreakdown,
       paymentMethodBreakdown,
@@ -228,7 +234,9 @@ router.get('/revenue-full', protect, adminOnly, async (req, res) => {
         pendingFees:       totalPendingFees,
         pendingFeeCount:   pendingFeeMembers.length,
       },
-    });
+    };
+    }); // end cache.getOrSet
+    res.json(data);
   } catch (err) { res.status(500).json({ message: err.message }); }
 });
 

@@ -2,10 +2,60 @@ require('dotenv').config();
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
+const compression = require('compression');
+const rateLimit = require('express-rate-limit');
+const helmet = require('helmet');
 const fileUpload = require('express-fileupload');
 const path = require('path');
 
 const app = express();
+
+// ── Security Headers (Helmet) ──────────────────────────────────────────────────
+app.use(helmet({
+  crossOriginResourcePolicy: { policy: 'cross-origin' }, // allow Cloudinary images
+  contentSecurityPolicy: false, // frontend handled separately by its own build
+}));
+
+// ── Compression ────────────────────────────────────────────────────────────────
+// Gzip/Brotli all JSON + text responses; skip file uploads (already compressed).
+app.use(compression({
+  level: 6,
+  filter: (req, res) => {
+    // Don't compress multipart uploads
+    const ct = req.headers['content-type'] || '';
+    if (ct.includes('multipart/form-data')) return false;
+    return compression.filter(req, res);
+  },
+}));
+
+// ── Rate Limiting ──────────────────────────────────────────────────────────────
+// Auth routes: stricter limit to slow brute-force attempts
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,  // 15 minutes
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { message: 'Too many requests, please try again after 15 minutes.' },
+});
+
+// General API limiter — generous, just protects against scraping/abuse
+const apiLimiter = rateLimit({
+  windowMs: 60 * 1000,        // 1 minute
+  max: 200,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { message: 'Too many requests, please slow down.' },
+});
+
+// ── Response-time header ───────────────────────────────────────────────────────
+app.use((req, res, next) => {
+  const start = process.hrtime.bigint();
+  res.on('finish', () => {
+    const ms = Number(process.hrtime.bigint() - start) / 1e6;
+    res.setHeader('X-Response-Time', `${ms.toFixed(1)}ms`);
+  });
+  next();
+});
 
 // ── CORS ──────────────────────────────────────────────────────────────────────
 // credentials:true is incompatible with origin:'*' (CORS spec §3.2).
@@ -33,8 +83,8 @@ app.use(cors(corsOptions));
 // Make sure preflight OPTIONS is handled for every route
 app.options('*', cors(corsOptions));
 
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 // On Vercel serverless use in-memory buffers (no /tmp/ write); locally use temp files
 app.use(fileUpload({
   useTempFiles: process.env.VERCEL !== '1',
@@ -78,6 +128,10 @@ app.use('/api', (req, res, next) => {
   next();
 });
 
+// ── Apply rate limiters before routes ─────────────────────────────────────────
+app.use('/api/auth', authLimiter);
+app.use('/api', apiLimiter);
+
 // Routes
 app.use('/api/auth',         require('./routes/auth'));
 app.use('/api/members',      require('./routes/members'));
@@ -93,6 +147,12 @@ app.use('/api/analytics',    require('./routes/analytics'));
 app.use('/api/progress',     require('./routes/progress'));
 app.use('/api/plans',        require('./routes/plans'));
 app.use('/api/splits',       require('./routes/splits'));
+
+// ── Cache stats health endpoint ────────────────────────────────────────────────
+app.get('/api/_cache/stats', (req, res) => {
+  const cache = require('./utils/cache');
+  res.json({ entries: cache.size() });
+});
 
 // Return JSON 404 for any unmatched /api/* routes (prevents HTML 404 confusing the frontend)
 app.use('/api/*', (req, res) => {

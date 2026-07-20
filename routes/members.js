@@ -5,6 +5,23 @@ const User = require('../models/User');
 const Notification = require('../models/Notification');
 const { protect, adminOnly } = require('../middleware/auth');
 const { sendWhatsApp } = require('../utils/whatsapp');
+const cache = require('../utils/cache');
+
+/** Bust all analytics cache keys when member data changes */
+function invalidateAnalytics() {
+  cache.delPattern('analytics:');
+}
+
+/** Send a welcome notification + WhatsApp when a member is created */
+async function sendWelcome(member, password) {
+  const title = '🎉 Welcome to FitNation by Ajeet!';
+  const message = `Hi ${member.name}! Your membership is now active.\n\nLogin at: ${process.env.FRONTEND_URL || 'https://gym-web-ten-puce.vercel.app'}/login\nEmail: ${member.email}\nPassword: ${password}\n\nWe're excited to have you with us! 💪`;
+  await Notification.create({ member: member._id, type: 'general', title, message, sentVia: ['website'] });
+  if (member.whatsapp || member.phone) {
+    const waNum = member.whatsapp || member.phone;
+    await sendWhatsApp(waNum, `*FITNATION BY AJEET*\n\n${message}`).catch(() => {});
+  }
+}
 
 /* ── helpers ── */
 const PLAN_MONTHS = { monthly: 1, quarterly: 3, 'half-yearly': 6, yearly: 12 };
@@ -65,6 +82,9 @@ router.post('/', protect, adminOnly, async (req, res) => {
       membershipStatus: 'active',
       feePaid: true,
     });
+    invalidateAnalytics();
+    // Send welcome message (non-blocking)
+    sendWelcome(member, password || phone).catch(() => {});
     res.status(201).json(member);
   } catch (err) { res.status(500).json({ message: err.message }); }
 });
@@ -88,6 +108,9 @@ router.put('/:id', protect, adminOnly, async (req, res) => {
 
     const member = await User.findByIdAndUpdate(req.params.id, update, { new: true });
     if (!member) return res.status(404).json({ message: 'Member not found' });
+    // Bust cached user so the protect middleware picks up new data
+    cache.del(`user:${req.params.id}`);
+    invalidateAnalytics();
     res.json(member);
   } catch (err) { res.status(500).json({ message: err.message }); }
 });
@@ -96,6 +119,8 @@ router.put('/:id', protect, adminOnly, async (req, res) => {
 router.delete('/:id', protect, adminOnly, async (req, res) => {
   try {
     await User.findByIdAndDelete(req.params.id);
+    cache.del(`user:${req.params.id}`);
+    invalidateAnalytics();
     res.json({ message: 'Member deleted' });
   } catch (err) { res.status(500).json({ message: err.message }); }
 });
