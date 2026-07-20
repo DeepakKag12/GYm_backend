@@ -3,6 +3,7 @@ const router = express.Router();
 const Transformation = require('../models/Transformation');
 const cloudinary = require('../config/cloudinary');
 const { protect, trainerOrAdmin } = require('../middleware/auth');
+const cache = require('../utils/cache');
 
 /** Upload to Cloudinary — buffer-safe (Vercel) + auto image compression */
 async function uploadImage(file, folder = 'transformations') {
@@ -24,9 +25,13 @@ async function uploadImage(file, folder = 'transformations') {
 // GET /api/transformations
 router.get('/', async (req, res) => {
   try {
-    const transformations = await Transformation.find({ isPublic: true })
-      .populate('member', 'name avatar')
-      .sort({ createdAt: -1 });
+    const transformations = await cache.getOrSet('transformations:public', 120, () =>
+      Transformation.find({ isPublic: true })
+        .populate('member', 'name avatar')
+        .sort({ createdAt: -1 })
+        .lean()
+    );
+    res.set('Cache-Control', 'public, max-age=120, stale-while-revalidate=240');
     res.json(transformations);
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -36,9 +41,12 @@ router.get('/', async (req, res) => {
 // GET /api/transformations/all - admin/trainer: all
 router.get('/all', protect, trainerOrAdmin, async (req, res) => {
   try {
-    const transformations = await Transformation.find()
-      .populate('member', 'name avatar')
-      .sort({ createdAt: -1 });
+    const transformations = await cache.getOrSet('transformations:all', 60, () =>
+      Transformation.find()
+        .populate('member', 'name avatar')
+        .sort({ createdAt: -1 })
+        .lean()
+    );
     res.json(transformations);
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -63,6 +71,7 @@ router.post('/', protect, trainerOrAdmin, async (req, res) => {
       uploadedBy: req.user._id,
       isPublic: req.body.isPublic === 'false' ? false : true,
     });
+    cache.delPattern('transformations:');
     res.status(201).json(transformation);
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -97,6 +106,7 @@ router.put('/:id', protect, trainerOrAdmin, async (req, res) => {
       },
       { new: true }
     );
+    cache.delPattern('transformations:');
     res.json(updated);
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -107,6 +117,7 @@ router.put('/:id', protect, trainerOrAdmin, async (req, res) => {
 router.delete('/:id', protect, trainerOrAdmin, async (req, res) => {
   try {
     await Transformation.findByIdAndDelete(req.params.id);
+    cache.delPattern('transformations:');
     res.json({ message: 'Deleted' });
   } catch (err) {
     res.status(500).json({ message: err.message });

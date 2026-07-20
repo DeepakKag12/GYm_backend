@@ -34,12 +34,17 @@ function calcExpiry(startDate, plan) {
   return d;
 }
 
+const MEMBERS_CACHE_KEY = 'members:all';
+
 // GET /api/members
 router.get('/', protect, adminOnly, async (req, res) => {
   try {
-    const members = await User.find({ role: 'member' })
-      .populate('assignedTrainer', 'name phone')
-      .sort({ createdAt: -1 });
+    const members = await cache.getOrSet(MEMBERS_CACHE_KEY, 60, () =>
+      User.find({ role: 'member' })
+        .populate('assignedTrainer', 'name phone')
+        .sort({ createdAt: -1 })
+        .lean()
+    );
     res.json(members);
   } catch (err) { res.status(500).json({ message: err.message }); }
 });
@@ -47,7 +52,10 @@ router.get('/', protect, adminOnly, async (req, res) => {
 // GET /api/members/:id
 router.get('/:id', protect, async (req, res) => {
   try {
-    const member = await User.findById(req.params.id).populate('assignedTrainer', 'name phone');
+    const key = `user:${req.params.id}`;
+    const member = await cache.getOrSet(key, 120, () =>
+      User.findById(req.params.id).populate('assignedTrainer', 'name phone').lean()
+    );
     if (!member) return res.status(404).json({ message: 'Member not found' });
     res.json(member);
   } catch (err) { res.status(500).json({ message: err.message }); }
@@ -83,6 +91,7 @@ router.post('/', protect, adminOnly, async (req, res) => {
       feePaid: true,
     });
     invalidateAnalytics();
+    cache.del(MEMBERS_CACHE_KEY);
     // Send welcome message (non-blocking)
     sendWelcome(member, password || phone).catch(() => {});
     res.status(201).json(member);
@@ -110,6 +119,7 @@ router.put('/:id', protect, adminOnly, async (req, res) => {
     if (!member) return res.status(404).json({ message: 'Member not found' });
     // Bust cached user so the protect middleware picks up new data
     cache.del(`user:${req.params.id}`);
+    cache.del(MEMBERS_CACHE_KEY);
     invalidateAnalytics();
     res.json(member);
   } catch (err) { res.status(500).json({ message: err.message }); }
@@ -120,6 +130,7 @@ router.delete('/:id', protect, adminOnly, async (req, res) => {
   try {
     await User.findByIdAndDelete(req.params.id);
     cache.del(`user:${req.params.id}`);
+    cache.del(MEMBERS_CACHE_KEY);
     invalidateAnalytics();
     res.json({ message: 'Member deleted' });
   } catch (err) { res.status(500).json({ message: err.message }); }

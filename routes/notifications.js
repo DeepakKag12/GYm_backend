@@ -3,11 +3,21 @@ const router = express.Router();
 const Notification = require('../models/Notification');
 const User = require('../models/User');
 const { protect, adminOnly } = require('../middleware/auth');
+const cache = require('../utils/cache');
+
+// TTL = 30 s — short so unread badge stays fresh, but avoids hammering DB
+// on every page navigation where Navbar + BottomNav both call this.
+const NOTIF_TTL = 30;
+
+function notifKey(userId) { return `notifs:member:${userId}`; }
 
 // GET /api/notifications — user's own notifications
 router.get('/', protect, async (req, res) => {
   try {
-    const notifs = await Notification.find({ member: req.user._id }).sort({ createdAt: -1 }).limit(50);
+    const key = notifKey(req.user._id);
+    const notifs = await cache.getOrSet(key, NOTIF_TTL, () =>
+      Notification.find({ member: req.user._id }).sort({ createdAt: -1 }).limit(50).lean()
+    );
     res.json(notifs);
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -21,7 +31,8 @@ router.get('/admin/all', protect, adminOnly, async (req, res) => {
       .find({})
       .sort({ createdAt: -1 })
       .limit(200)
-      .populate('member', 'name email');
+      .populate('member', 'name email')
+      .lean();
     res.json(notifs);
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -45,8 +56,9 @@ router.post('/admin/send', protect, adminOnly, async (req, res) => {
     if (!title || !message) return res.status(400).json({ message: 'Title and message required' });
 
     if (memberId) {
-      // Send to specific member
+      // Send to specific member and bust their cache
       const notif = await Notification.create({ member: memberId, title, message, type, sentVia: ['website'] });
+      cache.del(notifKey(memberId));
       return res.json(notif);
     }
 
@@ -54,6 +66,8 @@ router.post('/admin/send', protect, adminOnly, async (req, res) => {
     const members = await User.find({ role: 'member' }, '_id');
     const docs = members.map(m => ({ member: m._id, title, message, type, sentVia: ['website'] }));
     await Notification.insertMany(docs);
+    // Bust all member notification caches
+    cache.delPattern('notifs:member:');
     res.json({ message: `Sent to ${members.length} members` });
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -64,6 +78,7 @@ router.post('/admin/send', protect, adminOnly, async (req, res) => {
 router.put('/read-all', protect, async (req, res) => {
   try {
     await Notification.updateMany({ member: req.user._id, isRead: false }, { isRead: true });
+    cache.del(notifKey(req.user._id));
     res.json({ message: 'All marked as read' });
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -74,6 +89,7 @@ router.put('/read-all', protect, async (req, res) => {
 router.put('/:id/read', protect, async (req, res) => {
   try {
     const notif = await Notification.findByIdAndUpdate(req.params.id, { isRead: true }, { new: true });
+    cache.del(notifKey(req.user._id));
     res.json(notif);
   } catch (err) {
     res.status(500).json({ message: err.message });

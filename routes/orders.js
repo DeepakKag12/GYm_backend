@@ -8,8 +8,10 @@ const cache = require('../utils/cache');
 router.post('/', protect, async (req, res) => {
   try {
     const order = await Order.create({ ...req.body, user: req.user._id });
-    // Invalidate analytics so revenue numbers stay fresh
+    // Invalidate analytics + this member's orders cache
     cache.delPattern('analytics:');
+    cache.del(`orders:member:${req.user._id}`);
+    cache.del('orders:admin');
     res.status(201).json(order);
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -19,7 +21,10 @@ router.post('/', protect, async (req, res) => {
 // GET /api/orders/my - User's own orders
 router.get('/my', protect, async (req, res) => {
   try {
-    const orders = await Order.find({ user: req.user._id }).sort({ createdAt: -1 });
+    const key = `orders:member:${req.user._id}`;
+    const orders = await cache.getOrSet(key, 60, () =>
+      Order.find({ user: req.user._id }).sort({ createdAt: -1 }).lean()
+    );
     res.json(orders);
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -29,7 +34,9 @@ router.get('/my', protect, async (req, res) => {
 // GET /api/orders - Admin: all orders
 router.get('/', protect, adminOnly, async (req, res) => {
   try {
-    const orders = await Order.find().populate('user', 'name email phone').sort({ createdAt: -1 });
+    const orders = await cache.getOrSet('orders:admin', 60, () =>
+      Order.find().populate('user', 'name email phone').sort({ createdAt: -1 }).lean()
+    );
     res.json(orders);
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -44,6 +51,9 @@ router.put('/:id/status', protect, adminOnly, async (req, res) => {
       ...(req.body.paymentStatus && { paymentStatus: req.body.paymentStatus }),
     }, { new: true });
     cache.delPattern('analytics:');
+    cache.del('orders:admin');
+    // Bust the individual member's order cache too
+    if (order?.user) cache.del(`orders:member:${order.user}`);
     res.json(order);
   } catch (err) {
     res.status(500).json({ message: err.message });

@@ -3,6 +3,7 @@ const router = express.Router();
 const ProgressEntry = require('../models/ProgressEntry');
 const { protect, adminOnly, trainerOrAdmin } = require('../middleware/auth');
 const cloudinary = require('../config/cloudinary');
+const cache = require('../utils/cache');
 
 /** Upload to Cloudinary — buffer-safe (Vercel) + auto image compression */
 async function uploadPhoto(file) {
@@ -14,10 +15,14 @@ async function uploadPhoto(file) {
   });
 }
 
+function progressKey(id) { return `progress:member:${id}`; }
+
 // GET /api/progress/me  - member sees own entries
 router.get('/me', protect, async (req, res) => {
   try {
-    const entries = await ProgressEntry.find({ member: req.user._id }).sort({ date: -1 });
+    const entries = await cache.getOrSet(progressKey(req.user._id), 60, () =>
+      ProgressEntry.find({ member: req.user._id }).sort({ date: -1 }).lean()
+    );
     res.json(entries);
   } catch (err) { res.status(500).json({ message: err.message }); }
 });
@@ -25,7 +30,9 @@ router.get('/me', protect, async (req, res) => {
 // GET /api/progress/:memberId  - trainer/admin sees a member's entries
 router.get('/:memberId', protect, trainerOrAdmin, async (req, res) => {
   try {
-    const entries = await ProgressEntry.find({ member: req.params.memberId }).sort({ date: -1 });
+    const entries = await cache.getOrSet(progressKey(req.params.memberId), 60, () =>
+      ProgressEntry.find({ member: req.params.memberId }).sort({ date: -1 }).lean()
+    );
     res.json(entries);
   } catch (err) { res.status(500).json({ message: err.message }); }
 });
@@ -42,6 +49,7 @@ router.post('/', protect, async (req, res) => {
     const entry = await ProgressEntry.create({
       member: req.user._id, date, weight, bodyFat, chest, waist, hips, arms, thighs, notes, photo: photoUrl
     });
+    cache.del(progressKey(req.user._id));
     res.status(201).json(entry);
   } catch (err) { res.status(500).json({ message: err.message }); }
 });
@@ -55,6 +63,7 @@ router.delete('/:id', protect, async (req, res) => {
       return res.status(403).json({ message: 'Forbidden' });
     }
     await entry.deleteOne();
+    cache.del(progressKey(req.user._id));
     res.json({ message: 'Deleted' });
   } catch (err) { res.status(500).json({ message: err.message }); }
 });

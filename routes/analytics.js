@@ -2,6 +2,8 @@ const express = require('express');
 const router  = express.Router();
 const User    = require('../models/User');
 const Order   = require('../models/Order');
+const Exercise = require('../models/Exercise');
+const DietPlan = require('../models/DietPlan');
 const { protect, adminOnly } = require('../middleware/auth');
 const cache   = require('../utils/cache');
 
@@ -22,12 +24,15 @@ router.get('/summary', protect, adminOnly, async (req, res) => {
       const thisMonthStart = monthStart(0);
       const lastMonthStart = monthStart(-1);
 
-      const [totalMembers, activeMembers, expiredMembers, pendingMembers, orders] = await Promise.all([
+      const [totalMembers, activeMembers, expiredMembers, pendingMembers, orders, totalExercises, totalDietPlans, totalTrainers] = await Promise.all([
         User.countDocuments({ role: 'member' }),
         User.countDocuments({ role: 'member', membershipStatus: 'active' }),
         User.countDocuments({ role: 'member', membershipStatus: 'expired' }),
         User.countDocuments({ role: 'member', membershipStatus: 'pending' }),
         Order.find({}).lean(),
+        Exercise.countDocuments({}),
+        DietPlan.countDocuments({}),
+        User.countDocuments({ role: 'trainer' }),
       ]);
 
       const expiringIn7 = await User.countDocuments({
@@ -61,6 +66,9 @@ router.get('/summary', protect, adminOnly, async (req, res) => {
         totalMembers, activeMembers, expiredMembers, pendingMembers,
         expiringIn7,
         totalOrders: orders.length,
+        totalExercises,
+        totalDietPlans,
+        totalTrainers,
         revenue,
         monthlyRevenue,
         lastMonthRevenue,
