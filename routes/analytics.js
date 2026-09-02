@@ -333,9 +333,11 @@ router.post('/reset-to-production', protect, adminOnly, async (req, res) => {
      */
     const mongoose = require('mongoose');
     const Payment = require('../models/Payment');
+    const WorkoutSplit = require('../models/WorkoutSplit');
     const session = await mongoose.startSession();
     let membersDeleted = 0, ordersDeleted = 0, notifsDeleted = 0,
-        progressDeleted = 0, enquiriesDeleted = 0, transformsDeleted = 0, paymentsDeleted = 0;
+        progressDeleted = 0, enquiriesDeleted = 0, transformsDeleted = 0,
+        paymentsDeleted = 0, splitsDeleted = 0;
 
     try {
       await session.withTransaction(async () => {
@@ -346,6 +348,22 @@ router.post('/reset-to-production', protect, adminOnly, async (req, res) => {
         enquiriesDeleted  = (await Enquiry.deleteMany({}, { session })).deletedCount;
         transformsDeleted = (await Transformation.deleteMany({}, { session })).deletedCount;
         paymentsDeleted   = (await Payment.deleteMany({}, { session })).deletedCount;
+
+        /**
+         * Personal workout splits and diet-plan assignments point at members by
+         * id. Deleting the members without them left splits owned by nobody —
+         * they stayed in the admin list forever, belonging to a name that no
+         * longer resolves, and a new member could inherit one by id reuse.
+         *
+         * Shared content survives: splits with no member are the gym's default
+         * routines, and a diet plan is kept, only its assignment list cleared.
+         */
+        splitsDeleted = (await WorkoutSplit.deleteMany(
+          { member: { $ne: null } }, { session },
+        )).deletedCount;
+        await DietPlan.updateMany(
+          { assignedTo: { $ne: [] } }, { $set: { assignedTo: [] } }, { session },
+        );
       });
     } finally {
       await session.endSession();
@@ -359,6 +377,7 @@ router.post('/reset-to-production', protect, adminOnly, async (req, res) => {
     cache.delPattern('orders:');
     cache.delPattern('notifications:');
     cache.delPattern('enquiries:');
+    cache.delPattern('splits:');
     cache.del('payments:summary');
 
     res.json({
@@ -366,11 +385,13 @@ router.post('/reset-to-production', protect, adminOnly, async (req, res) => {
       kept: 'Admin, trainers, membership plans, exercises, diet plans, workout splits, products',
       deleted: {
         members:         membersDeleted,
+        payments:        paymentsDeleted,
         orders:          ordersDeleted,
         notifications:   notifsDeleted,
         progressEntries: progressDeleted,
         enquiries:       enquiriesDeleted,
         transformations: transformsDeleted,
+        personalSplits:  splitsDeleted,
       },
     });
   } catch (err) {
