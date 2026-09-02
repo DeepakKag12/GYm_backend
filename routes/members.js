@@ -13,6 +13,7 @@ const Exercise = require('../models/Exercise');
 const DietPlan = require('../models/DietPlan');
 const { BRAND, SITE_URL } = require('../utils/emailTemplate');
 const { runFeeReminderSweep, daysRemaining } = require('../services/feeReminder');
+const Payment = require('../models/Payment');
 const cache = require('../utils/cache');
 
 /** Bust all analytics cache keys when member data changes */
@@ -139,6 +140,22 @@ router.post('/', protect, adminOnly, async (req, res) => {
       membershipStatus: 'active',
       feePaid: true,
     });
+    // Bank the joining fee as its own row. Without this, membership income only
+    // ever existed as the member's current feeAmount and could not be reported
+    // against a date.
+    if (Number(feeAmount) > 0) {
+      await Payment.create({
+        member: member._id,
+        source: 'membership',
+        kind: 'new-membership',
+        amount: Number(feeAmount),
+        periodStart: member.membershipStart,
+        periodEnd: member.membershipEnd,
+        recordedBy: req.user._id,
+        note: 'Joining fee',
+      });
+    }
+
     invalidateAnalytics();
     cache.del(MEMBERS_CACHE_KEY);
     // Send welcome message (non-blocking)
@@ -221,6 +238,38 @@ router.put('/:id', protect, adminOnly, async (req, res) => {
       context: 'query',
     }).select('-password');
     if (!member) return res.status(404).json({ message: 'Member not found' });
+    /**
+     * A renewal is money in, and until now nothing recorded it.
+     *
+     * `endMoved` is the honest signal: the membership period actually changed,
+     * which is what a renewal is. Correcting a typo in someone's name leaves
+     * the dates alone and banks nothing.
+     *
+     * The idempotency key is the member plus the new end date, so re-saving the
+     * same renewal — a double-submitted form, a retried request — cannot bank
+     * the fee twice.
+     */
+    if (endMoved && Number(req.body.feeAmount) > 0) {
+      const key = `renewal:${member._id}:${new Date(member.membershipEnd).toISOString()}`;
+      try {
+        await Payment.create({
+          member: member._id,
+          source: 'membership',
+          kind: current.membershipEnd ? 'renewal' : 'new-membership',
+          amount: Number(req.body.feeAmount),
+          periodStart: member.membershipStart,
+          periodEnd: member.membershipEnd,
+          recordedBy: req.user._id,
+          idempotencyKey: key,
+          note: current.membershipEnd ? 'Membership renewal' : 'Joining fee',
+        });
+      } catch (err) {
+        // 11000 = this exact renewal was already banked. Anything else is worth
+        // knowing about, but must not fail the member update itself.
+        if (err?.code !== 11000) console.error('Payment record failed:', err.message);
+      }
+    }
+
     // Bust cached user so the protect middleware picks up new data
     cache.del(`user:${req.params.id}`);
     cache.del(`member:profile:${req.params.id}`);

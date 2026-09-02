@@ -181,6 +181,7 @@ app.use('/api/analytics',    require('./routes/analytics'));
 app.use('/api/progress',     require('./routes/progress'));
 app.use('/api/plans',        require('./routes/plans'));
 app.use('/api/settings',     require('./routes/settings'));
+app.use('/api/payments',     require('./routes/payments'));
 app.use('/api/splits',       require('./routes/splits'));
 app.use('/api/cron',         require('./routes/cron'));
 

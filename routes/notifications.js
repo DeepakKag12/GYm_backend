@@ -171,4 +171,44 @@ router.put('/:id/read', protect, async (req, res) => {
   }
 });
 
+
+// DELETE /api/notifications/admin/:id — remove one notification
+router.delete('/admin/:id', protect, adminOnly, async (req, res) => {
+  try {
+    const gone = await Notification.findByIdAndDelete(req.params.id);
+    if (!gone) return res.status(404).json({ message: 'Notification not found' });
+    cache.del(ADMIN_FEED_KEY);
+    if (gone.member) cache.del(`notifs:member:${gone.member}`);
+    res.json({ message: 'Notification deleted.' });
+  } catch (err) { res.status(500).json({ message: err.message }); }
+});
+
+/**
+ * DELETE /api/notifications/admin — clear history in bulk.
+ *
+ * Scoped rather than all-or-nothing: `?member=<id>` clears one person's
+ * history, `?before=<iso date>` prunes anything older than a date. With no
+ * filter it refuses, because "delete everything" should be a deliberate act,
+ * not what happens when a query string is forgotten.
+ */
+router.delete('/admin', protect, adminOnly, async (req, res) => {
+  try {
+    const { member, before, all } = req.query;
+    const filter = {};
+    if (member) filter.member = member;
+    if (before) filter.createdAt = { $lt: new Date(before) };
+
+    if (!member && !before && all !== 'true') {
+      return res.status(400).json({
+        message: 'Choose a member, a date, or pass all=true to clear everything.',
+      });
+    }
+
+    const { deletedCount } = await Notification.deleteMany(filter);
+    cache.del(ADMIN_FEED_KEY);
+    cache.delPattern('notifs:member:');
+    res.json({ message: `Deleted ${deletedCount} notification${deletedCount === 1 ? '' : 's'}.`, deletedCount });
+  } catch (err) { res.status(500).json({ message: err.message }); }
+});
+
 module.exports = router;

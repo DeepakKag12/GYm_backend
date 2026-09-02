@@ -1,4 +1,5 @@
 const express        = require('express');
+const Payment = require('../models/Payment');
 const router         = express.Router();
 const User           = require('../models/User');
 const Order          = require('../models/Order');
@@ -76,9 +77,17 @@ router.get('/summary', protect, adminOnly, async (req, res) => {
       const monthlyRevenue   = monthlyRevenueAgg[0]?.total   || 0;
       const lastMonthRevenue = lastMonthRevenueAgg[0]?.total || 0;
 
-      const membershipFeeRevenue = await User.aggregate([
-        { $match: { role: 'member', feePaid: true } },
-        { $group: { _id: null, total: { $sum: '$feeAmount' } } },
+      /**
+       * Membership income comes from the Payment ledger, not from summing each
+       * member's current feeAmount.
+       *
+       * The old sum counted a member once at whatever they are charged today,
+       * so a year of renewals still read as one month's fee, and income could
+       * not be attributed to a month.
+       */
+      const membershipFeeRevenue = await Payment.aggregate([
+        { $match: { source: 'membership' } },
+        { $group: { _id: null, total: { $sum: '$amount' } } },
       ]);
       const membershipRevenue = membershipFeeRevenue[0]?.total || 0;
 
@@ -335,6 +344,68 @@ router.post('/reset-to-production', protect, adminOnly, async (req, res) => {
     });
   } catch (err) {
     res.status(500).json({ message: err.message });
+  }
+});
+
+
+/**
+ * POST /api/analytics/reset — wipe reporting data, password-confirmed.
+ *
+ * This is destructive and irreversible, so being an admin is not enough: the
+ * caller must re-enter their own password in the same request. A session left
+ * open on a gym counter should not be one stray click from erasing the books.
+ *
+ * Deliberately scoped. `scopes` names exactly what goes, and members, trainers
+ * and their memberships are never touched — this clears the record of money and
+ * messages, not the people.
+ */
+router.post('/reset', protect, adminOnly, async (req, res) => {
+  try {
+    const { password, scopes, confirm } = req.body || {};
+
+    if (!password) {
+      return res.status(400).json({ message: 'Enter your password to confirm.' });
+    }
+    if (confirm !== 'DELETE') {
+      return res.status(400).json({ message: 'Type DELETE to confirm.' });
+    }
+
+    // Re-authenticate against the caller's own hash, freshly read — req.user is
+    // cached by the protect middleware and has no password field.
+    const bcrypt = require('bcryptjs');
+    const admin = await User.findById(req.user._id).select('password');
+    const ok = admin && await bcrypt.compare(password, admin.password);
+    if (!ok) return res.status(401).json({ message: 'That password is not correct.' });
+
+    const VALID = ['payments', 'orders', 'notifications', 'enquiries'];
+    const wanted = Array.isArray(scopes) ? scopes.filter(s => VALID.includes(s)) : [];
+    if (wanted.length === 0) {
+      return res.status(400).json({ message: `Choose what to clear: ${VALID.join(', ')}.` });
+    }
+
+    const Payment = require('../models/Payment');
+    const Notification = require('../models/Notification');
+    const Enquiry = require('../models/Enquiry');
+
+    const deleted = {};
+    if (wanted.includes('payments'))      deleted.payments      = (await Payment.deleteMany({})).deletedCount;
+    if (wanted.includes('orders'))        deleted.orders        = (await Order.deleteMany({})).deletedCount;
+    if (wanted.includes('notifications')) deleted.notifications = (await Notification.deleteMany({})).deletedCount;
+    if (wanted.includes('enquiries'))     deleted.enquiries     = (await Enquiry.deleteMany({})).deletedCount;
+
+    cache.delPattern('analytics:');
+    cache.del('payments:summary');
+    cache.delPattern('notifs:');
+    cache.del('enquiries:all');
+    cache.del('orders:admin');
+
+    console.warn(`⚠️  Data reset by ${req.user.email}: ${JSON.stringify(deleted)}`);
+
+    const total = Object.values(deleted).reduce((n, v) => n + v, 0);
+    res.json({ message: `Cleared ${total} record${total === 1 ? '' : 's'}.`, deleted });
+  } catch (err) {
+    console.error('Data reset failed:', err.message);
+    res.status(500).json({ message: 'Could not clear the data.' });
   }
 });
 
