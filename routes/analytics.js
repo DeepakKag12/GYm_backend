@@ -299,29 +299,59 @@ router.get('/revenue-full', protect, adminOnly, async (req, res) => {
 //          diet plans, workout splits, products — these are config/content.
 router.post('/reset-to-production', protect, adminOnly, async (req, res) => {
   try {
-    const { confirm } = req.body;
+    const { confirm, password } = req.body;
     if (confirm !== 'RESET_TO_PRODUCTION') {
       return res.status(400).json({
         message: 'Send { confirm: "RESET_TO_PRODUCTION" } in the request body to confirm.',
       });
     }
 
-    // Run all deletes in parallel — no scoping by email, wipes every record
-    const [
-      membersDeleted,
-      ordersDeleted,
-      notifsDeleted,
-      progressDeleted,
-      enquiriesDeleted,
-      transformsDeleted,
-    ] = await Promise.all([
-      User.deleteMany({ role: 'member' }).then(r => r.deletedCount),
-      Order.deleteMany({}).then(r => r.deletedCount),
-      Notification.deleteMany({}).then(r => r.deletedCount),
-      ProgressEntry.deleteMany({}).then(r => r.deletedCount),
-      Enquiry.deleteMany({}).then(r => r.deletedCount),
-      Transformation.deleteMany({}).then(r => r.deletedCount),
-    ]);
+    /**
+     * This deletes every member. A magic string alone was not enough of a
+     * guard for that — an admin session left open on the gym counter plus one
+     * crafted request would empty the gym. The caller re-enters their own
+     * password, checked against the stored hash.
+     */
+    if (!password) {
+      return res.status(400).json({ message: 'Enter your password to confirm.' });
+    }
+    const bcrypt = require('bcryptjs');
+    const me = await User.findById(req.user._id).select('password');
+    if (!me || !(await bcrypt.compare(password, me.password))) {
+      return res.status(401).json({ message: 'That password is not correct.' });
+    }
+
+    /**
+     * One transaction, so the reset cannot half-succeed.
+     *
+     * Run in parallel outside a transaction, a failure partway through left the
+     * database inconsistent — members gone but their orders and payments still
+     * referencing them.
+     *
+     * Payment is included for the same reason: leaving the ledger behind would
+     * report income for members who no longer exist.
+     */
+    const mongoose = require('mongoose');
+    const Payment = require('../models/Payment');
+    const session = await mongoose.startSession();
+    let membersDeleted = 0, ordersDeleted = 0, notifsDeleted = 0,
+        progressDeleted = 0, enquiriesDeleted = 0, transformsDeleted = 0, paymentsDeleted = 0;
+
+    try {
+      await session.withTransaction(async () => {
+        membersDeleted    = (await User.deleteMany({ role: 'member' }, { session })).deletedCount;
+        ordersDeleted     = (await Order.deleteMany({}, { session })).deletedCount;
+        notifsDeleted     = (await Notification.deleteMany({}, { session })).deletedCount;
+        progressDeleted   = (await ProgressEntry.deleteMany({}, { session })).deletedCount;
+        enquiriesDeleted  = (await Enquiry.deleteMany({}, { session })).deletedCount;
+        transformsDeleted = (await Transformation.deleteMany({}, { session })).deletedCount;
+        paymentsDeleted   = (await Payment.deleteMany({}, { session })).deletedCount;
+      });
+    } finally {
+      await session.endSession();
+    }
+
+    console.warn(`⚠️  reset-to-production by ${req.user.email}: ${membersDeleted} members, ${paymentsDeleted} payments`);
 
     // Bust every cache key
     cache.delPattern('analytics:');
@@ -329,6 +359,7 @@ router.post('/reset-to-production', protect, adminOnly, async (req, res) => {
     cache.delPattern('orders:');
     cache.delPattern('notifications:');
     cache.delPattern('enquiries:');
+    cache.del('payments:summary');
 
     res.json({
       message: 'Production reset complete. Ready to add real data.',

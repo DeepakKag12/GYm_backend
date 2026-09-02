@@ -1,4 +1,5 @@
 const express = require('express');
+const mongoose = require('mongoose');
 const router = express.Router();
 const bcrypt = require('bcryptjs');
 const User = require('../models/User');
@@ -127,33 +128,47 @@ router.post('/', protect, adminOnly, async (req, res) => {
       return res.status(400).json({ message: 'Provide a password, or a mobile number to use as one.' });
     }
     const hashed = await bcrypt.hash(password || phone, 10);
-    const member = await User.create({
-      name, email, phone, whatsapp,
-      password: hashed,
-      role: 'member',
-      membershipPlan,
-      membershipStart,
-      membershipEnd: expiry,
-      feeAmount,
-      assignedTrainer: assignedTrainer || undefined,
-      gender, dob, address,
-      membershipStatus: 'active',
-      feePaid: true,
-    });
-    // Bank the joining fee as its own row. Without this, membership income only
-    // ever existed as the member's current feeAmount and could not be reported
-    // against a date.
-    if (Number(feeAmount) > 0) {
-      await Payment.create({
-        member: member._id,
-        source: 'membership',
-        kind: 'new-membership',
-        amount: Number(feeAmount),
-        periodStart: member.membershipStart,
-        periodEnd: member.membershipEnd,
-        recordedBy: req.user._id,
-        note: 'Joining fee',
+    /**
+     * The member and their joining fee are written together or not at all.
+     *
+     * Created separately, a failure banking the fee left a member on the books
+     * whose money was never recorded — the accounts would quietly understate
+     * income, and nothing would flag it.
+     */
+    const session = await mongoose.startSession();
+    let member;
+    try {
+      await session.withTransaction(async () => {
+        const [created] = await User.create([{
+          name, email, phone, whatsapp,
+          password: hashed,
+          role: 'member',
+          membershipPlan,
+          membershipStart,
+          membershipEnd: expiry,
+          feeAmount,
+          assignedTrainer: assignedTrainer || undefined,
+          gender, dob, address,
+          membershipStatus: 'active',
+          feePaid: true,
+        }], { session });
+        member = created;
+
+        if (Number(feeAmount) > 0) {
+          await Payment.create([{
+            member: member._id,
+            source: 'membership',
+            kind: 'new-membership',
+            amount: Number(feeAmount),
+            periodStart: member.membershipStart,
+            periodEnd: member.membershipEnd,
+            recordedBy: req.user._id,
+            note: 'Joining fee',
+          }], { session });
+        }
       });
+    } finally {
+      await session.endSession();
     }
 
     invalidateAnalytics();
@@ -228,46 +243,59 @@ router.put('/:id', protect, adminOnly, async (req, res) => {
       }
     }
 
-    const member = await User.findByIdAndUpdate(req.params.id, update, {
-      new: true,
-      // Without runValidators, findByIdAndUpdate skips the schema entirely:
-      // membershipPlan: 'fortnightly' saved happily and broke the expiry
-      // calculation later. `context: 'query'` is what makes enum checks apply
-      // to an update rather than only to a new document.
-      runValidators: true,
-      context: 'query',
-    }).select('-password');
-    if (!member) return res.status(404).json({ message: 'Member not found' });
     /**
-     * A renewal is money in, and until now nothing recorded it.
+     * The membership change and the money it represents are one transaction.
      *
-     * `endMoved` is the honest signal: the membership period actually changed,
-     * which is what a renewal is. Correcting a typo in someone's name leaves
-     * the dates alone and banks nothing.
-     *
-     * The idempotency key is the member plus the new end date, so re-saving the
-     * same renewal — a double-submitted form, a retried request — cannot bank
-     * the fee twice.
+     * Written separately, a renewal could extend the period and then fail to
+     * bank the fee — the member trains for another month and the books never
+     * see it. Either both land or neither does.
      */
-    if (endMoved && Number(req.body.feeAmount) > 0) {
-      const key = `renewal:${member._id}:${new Date(member.membershipEnd).toISOString()}`;
-      try {
-        await Payment.create({
-          member: member._id,
-          source: 'membership',
-          kind: current.membershipEnd ? 'renewal' : 'new-membership',
-          amount: Number(req.body.feeAmount),
-          periodStart: member.membershipStart,
-          periodEnd: member.membershipEnd,
-          recordedBy: req.user._id,
-          idempotencyKey: key,
-          note: current.membershipEnd ? 'Membership renewal' : 'Joining fee',
-        });
-      } catch (err) {
-        // 11000 = this exact renewal was already banked. Anything else is worth
-        // knowing about, but must not fail the member update itself.
-        if (err?.code !== 11000) console.error('Payment record failed:', err.message);
-      }
+    const session = await mongoose.startSession();
+    let member;
+    try {
+      await session.withTransaction(async () => {
+        member = await User.findByIdAndUpdate(req.params.id, update, {
+          new: true,
+          // Without runValidators, findByIdAndUpdate skips the schema entirely:
+          // membershipPlan: 'fortnightly' saved happily and broke the expiry
+          // calculation later. `context: 'query'` is what makes enum checks apply
+          // to an update rather than only to a new document.
+          runValidators: true,
+          context: 'query',
+          session,
+        }).select('-password');
+        if (!member) {
+          const e = new Error('Member not found'); e.status = 404; throw e;
+        }
+
+        if (endMoved && Number(req.body.feeAmount) > 0) {
+          // Keyed on member + new end date, so a resubmitted renewal cannot
+          // bank the same fee twice even across separate requests.
+          const key = `renewal:${member._id}:${new Date(member.membershipEnd).toISOString()}`;
+          try {
+            await Payment.create([{
+              member: member._id,
+              source: 'membership',
+              kind: current.membershipEnd ? 'renewal' : 'new-membership',
+              amount: Number(req.body.feeAmount),
+              periodStart: member.membershipStart,
+              periodEnd: member.membershipEnd,
+              recordedBy: req.user._id,
+              idempotencyKey: key,
+              note: current.membershipEnd ? 'Membership renewal' : 'Joining fee',
+            }], { session });
+          } catch (err) {
+            // 11000 means this exact renewal is already banked — the membership
+            // update should still stand, so this one case is swallowed.
+            if (err?.code !== 11000) throw err;
+          }
+        }
+      });
+    } catch (err) {
+      if (err?.status === 404) return res.status(404).json({ message: err.message });
+      throw err;
+    } finally {
+      await session.endSession();
     }
 
     // Bust cached user so the protect middleware picks up new data
