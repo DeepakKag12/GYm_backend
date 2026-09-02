@@ -4,6 +4,7 @@ const Product = require('../models/Product');
 const cloudinary = require('../config/cloudinary');
 const { protect, adminOnly } = require('../middleware/auth');
 const cache = require('../utils/cache');
+const { publicCache } = require('../middleware/publicCache');
 
 /** Upload to Cloudinary — buffer-safe (Vercel) + auto image compression */
 async function uploadImage(file, folder = 'store') {
@@ -23,7 +24,7 @@ async function uploadImage(file, folder = 'store') {
 }
 
 // GET /api/store?category=protein
-router.get('/', async (req, res) => {
+router.get('/', publicCache(60), async (req, res) => {
   try {
     const { category, featured, search } = req.query;
     const cacheKey = `store:list:${category || ''}:${featured || ''}:${search || ''}`;
@@ -34,7 +35,6 @@ router.get('/', async (req, res) => {
       if (search) query.name = { $regex: search, $options: 'i' };
       return Product.find(query).sort({ createdAt: -1 }).lean();
     });
-    res.set('Cache-Control', 'public, max-age=60, stale-while-revalidate=120');
     res.json(products);
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -42,7 +42,7 @@ router.get('/', async (req, res) => {
 });
 
 // GET /api/store/:id
-router.get('/:id', async (req, res) => {
+router.get('/:id', publicCache(120), async (req, res) => {
   try {
     const cacheKey = `store:item:${req.params.id}`;
     const product = await cache.getOrSet(cacheKey, 120, async () => {
@@ -50,7 +50,6 @@ router.get('/:id', async (req, res) => {
       return p;
     });
     if (!product) return res.status(404).json({ message: 'Product not found' });
-    res.set('Cache-Control', 'public, max-age=120, stale-while-revalidate=240');
     res.json(product);
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -102,8 +101,14 @@ router.put('/:id', protect, adminOnly, async (req, res) => {
       }
       update.images = newImages;
     }
-    update.isActive = update.isActive === 'false' ? false : Boolean(update.isActive ?? true);
-    update.isFeatured = update.isFeatured === 'true' || update.isFeatured === true;
+    // Only coerce when the field was actually sent. Recomputing unconditionally
+    // meant any partial edit re-activated a hidden product and cleared "featured".
+    if (update.isActive !== undefined) {
+      update.isActive = !(update.isActive === 'false' || update.isActive === false);
+    }
+    if (update.isFeatured !== undefined) {
+      update.isFeatured = update.isFeatured === 'true' || update.isFeatured === true;
+    }
     const product = await Product.findByIdAndUpdate(req.params.id, update, { new: true });
     if (!product) return res.status(404).json({ message: 'Product not found' });
     cache.del(`store:item:${req.params.id}`);
@@ -117,7 +122,8 @@ router.put('/:id', protect, adminOnly, async (req, res) => {
 // DELETE /api/store/:id
 router.delete('/:id', protect, adminOnly, async (req, res) => {
   try {
-    await Product.findByIdAndDelete(req.params.id);
+    const deleted = await Product.findByIdAndDelete(req.params.id);
+    if (!deleted) return res.status(404).json({ message: 'Product not found' });
     cache.del(`store:item:${req.params.id}`);
     cache.delPattern('store:list');
     res.json({ message: 'Product deleted' });
@@ -132,7 +138,18 @@ router.post('/:id/review', protect, async (req, res) => {
     const { rating, comment } = req.body;
     const product = await Product.findById(req.params.id);
     if (!product) return res.status(404).json({ message: 'Product not found' });
-    product.reviews.push({ user: req.user._id, name: req.user.name, rating, comment });
+    const score = Number(rating);
+    if (!Number.isFinite(score) || score < 1 || score > 5) {
+      return res.status(400).json({ message: 'Rating must be between 1 and 5' });
+    }
+    // One review per user — this used to append a duplicate on every submit,
+    // letting a single account drag the average rating anywhere it liked.
+    const existing = product.reviews.find(r => String(r.user) === String(req.user._id));
+    if (existing) {
+      existing.rating = score; existing.comment = comment; existing.date = new Date();
+    } else {
+      product.reviews.push({ user: req.user._id, name: req.user.name, rating: score, comment });
+    }
     product.reviewCount = product.reviews.length;
     product.rating = product.reviews.reduce((s, r) => s + r.rating, 0) / product.reviews.length;
     await product.save();

@@ -4,6 +4,7 @@ const Transformation = require('../models/Transformation');
 const cloudinary = require('../config/cloudinary');
 const { protect, trainerOrAdmin } = require('../middleware/auth');
 const cache = require('../utils/cache');
+const { publicCache } = require('../middleware/publicCache');
 
 /** Upload to Cloudinary — buffer-safe (Vercel) + auto image compression */
 async function uploadImage(file, folder = 'transformations') {
@@ -23,7 +24,7 @@ async function uploadImage(file, folder = 'transformations') {
 }
 
 // GET /api/transformations
-router.get('/', async (req, res) => {
+router.get('/', publicCache(60), async (req, res) => {
   try {
     const transformations = await cache.getOrSet('transformations:public', 120, () =>
       Transformation.find({ isPublic: true })
@@ -31,7 +32,6 @@ router.get('/', async (req, res) => {
         .sort({ createdAt: -1 })
         .lean()
     );
-    res.set('Cache-Control', 'public, max-age=120, stale-while-revalidate=240');
     res.json(transformations);
   } catch (err) {
     res.status(500).json({ message: err.message });

@@ -10,4 +10,8 @@ const membershipPlanSchema = new mongoose.Schema({
   isActive:    { type: Boolean, default: true },
 }, { timestamps: true });
 
+// ── Performance indexes ────────────────────────────────────────────────────────
+// The public pricing list: active plans, cheapest first.
+membershipPlanSchema.index({ isActive: 1, price: 1 });
+
 module.exports = mongoose.model('MembershipPlan', membershipPlanSchema);

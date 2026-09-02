@@ -12,11 +12,20 @@ const signToken = (id) => jwt.sign({ id }, process.env.JWT_SECRET, { expiresIn: 
 router.post('/register', async (req, res) => {
   try {
     const { name, email, phone, password } = req.body;
-    const exists = await User.findOne({ email });
+    if (!name || !email || !phone || !password) {
+      return res.status(400).json({ message: 'Name, email, phone and password are all required' });
+    }
+    if (password.length < 6) {
+      return res.status(400).json({ message: 'Password must be at least 6 characters' });
+    }
+    const normalisedEmail = String(email).trim().toLowerCase();
+    const exists = await User.findOne({ email: normalisedEmail });
     if (exists) return res.status(400).json({ message: 'Email already registered' });
 
     const hashed = await bcrypt.hash(password, 10);
-    const user = await User.create({ name, email, phone, password: hashed, role: 'member' });
+    const user = await User.create({
+      name, email: normalisedEmail, phone, password: hashed, role: 'member',
+    });
     res.status(201).json({ token: signToken(user._id), user: { ...user._doc, password: undefined } });
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -27,10 +36,22 @@ router.post('/register', async (req, res) => {
 router.post('/login', async (req, res) => {
   try {
     const { email, password } = req.body;
-    const user = await User.findOne({ email });
-    if (!user) return res.status(400).json({ message: 'Invalid credentials' });
+    if (!email || !password) {
+      return res.status(400).json({ message: 'Email and password are required' });
+    }
+    // The schema lowercases email on write, so a stored address is always
+    // lowercase. Normalising the lookup too means "Ajeet@Gym.in" and a stray
+    // trailing space from a phone keyboard still find the account.
+    const user = await User.findOne({ email: String(email).trim().toLowerCase() });
+    // 401, not 400: the request was fine, the credentials were refused. The
+    // message stays identical either way so it cannot be used to discover
+    // which email addresses exist.
+    if (!user) return res.status(401).json({ message: 'Invalid credentials' });
     const match = await bcrypt.compare(password, user.password);
-    if (!match) return res.status(400).json({ message: 'Invalid credentials' });
+    if (!match) return res.status(401).json({ message: 'Invalid credentials' });
+    if (user.isActive === false) {
+      return res.status(403).json({ message: 'Account deactivated. Contact the gym.' });
+    }
     res.json({ token: signToken(user._id), user: { ...user._doc, password: undefined } });
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -71,6 +92,10 @@ router.put('/update-credentials', protect, async (req, res) => {
   try {
     const { currentPassword, newEmail, newPassword } = req.body;
     const user = await User.findById(req.user._id);
+    if (!user) return res.status(404).json({ message: 'User not found' });
+    if (!currentPassword) {
+      return res.status(400).json({ message: 'Current password is required' });
+    }
 
     // Verify current password
     const match = await bcrypt.compare(currentPassword, user.password);
@@ -88,6 +113,8 @@ router.put('/update-credentials', protect, async (req, res) => {
     }
 
     await user.save();
+    // Bust the cached user or `protect` serves the old email for up to 5 minutes
+    cache.del(`user:${user._id}`);
     const updated = await User.findById(user._id).select('-password');
     res.json({ message: 'Credentials updated successfully', user: updated });
   } catch (err) {

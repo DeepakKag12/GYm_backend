@@ -5,8 +5,9 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "node -e \"const {execSync}=require('child_process');try{const p=execSync('netstat -ano').toString().split('\\n').find(l=>l.includes(':5000')&&l.includes('LISTENING'));if(p){const pid=p.trim().split(/\\s+/).pop();execSync('taskkill /PID '+pid+' /F');console.log('Freed port 5000')}}catch(e){}\" && nodemon server.js",
-    "seed": "node seed.js"
+    "dev": "node scripts/freePort.js && nodemon server.js",
+    "seed": "node seed.js",
+    "test:notify": "node scripts/testNotification.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

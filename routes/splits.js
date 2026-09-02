@@ -94,11 +94,19 @@ router.put('/planner', protect, async (req, res) => {
   } catch (err) { res.status(500).json({ message: err.message }); }
 });
 
+const SPLITS_LIST_KEY = 'splits:all';
+
 // GET /api/splits - admin/trainer: all splits (excludes personal planners)
+// lean(): this list is read-only, so full Mongoose documents were being
+// hydrated (and their getters/setters built) for nothing.
 router.get('/', protect, trainerOrAdmin, async (req, res) => {
   try {
-    const splits = await WorkoutSplit.find({ title: { $ne: '__personal_planner__' } })
-      .populate('member', 'name').sort({ createdAt: -1 });
+    const splits = await cache.getOrSet(SPLITS_LIST_KEY, 60, () =>
+      WorkoutSplit.find({ title: { $ne: '__personal_planner__' } })
+        .populate('member', 'name')
+        .sort({ createdAt: -1 })
+        .lean()
+    );
     res.json(splits);
   } catch (err) { res.status(500).json({ message: err.message }); }
 });
@@ -109,6 +117,7 @@ router.post('/', protect, trainerOrAdmin, async (req, res) => {
     const split = await WorkoutSplit.create({ ...req.body, createdBy: req.user._id });
     // Bust assigned-split cache for the member this was created for
     if (req.body.member) cache.del(`split:assigned:${req.body.member}`);
+    cache.del(SPLITS_LIST_KEY);
     res.status(201).json(split);
   } catch (err) { res.status(500).json({ message: err.message }); }
 });
@@ -120,6 +129,7 @@ router.put('/:id', protect, trainerOrAdmin, async (req, res) => {
     if (!split) return res.status(404).json({ message: 'Split not found' });
     // Bust assigned cache for the member
     if (split.member) cache.del(`split:assigned:${split.member}`);
+    cache.del(SPLITS_LIST_KEY);
     cache.delPattern('split:assigned:');
     res.json(split);
   } catch (err) { res.status(500).json({ message: err.message }); }
@@ -130,6 +140,7 @@ router.delete('/:id', protect, trainerOrAdmin, async (req, res) => {
   try {
     const split = await WorkoutSplit.findById(req.params.id);
     if (split?.member) cache.del(`split:assigned:${split.member}`);
+    cache.del(SPLITS_LIST_KEY);
     await WorkoutSplit.findByIdAndDelete(req.params.id);
     res.json({ message: 'Deleted' });
   } catch (err) { res.status(500).json({ message: err.message }); }

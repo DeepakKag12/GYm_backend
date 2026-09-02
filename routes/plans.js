@@ -39,7 +39,8 @@ router.put('/:id', protect, adminOnly, async (req, res) => {
 // DELETE /api/plans/:id
 router.delete('/:id', protect, adminOnly, async (req, res) => {
   try {
-    await MembershipPlan.findByIdAndDelete(req.params.id);
+    const deleted = await MembershipPlan.findByIdAndDelete(req.params.id);
+    if (!deleted) return res.status(404).json({ message: 'Plan not found' });
     cache.del(PLANS_CACHE_KEY);
     res.json({ message: 'Deleted' });
   } catch (err) { res.status(500).json({ message: err.message }); }

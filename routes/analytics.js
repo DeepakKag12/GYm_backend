@@ -28,10 +28,16 @@ router.get('/summary', protect, adminOnly, async (req, res) => {
       const thisMonthStart = monthStart(0);
       const lastMonthStart = monthStart(-1);
 
+      // Counts the admin dashboard needs. Adding them here means that screen
+      // makes ONE small request instead of downloading every member and every
+      // enquiry document just to count them in the browser.
+      const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+
       const [
         totalMembers, activeMembers, expiredMembers, pendingMembers,
         totalOrders, totalExercises, totalDietPlans, totalTrainers,
         revenueAgg, monthlyRevenueAgg, lastMonthRevenueAgg,
+        newMembers30d, newEnquiries, disabledMembers,
       ] = await Promise.all([
         User.countDocuments({ role: 'member' }),
         User.countDocuments({ role: 'member', membershipStatus: 'active' }),
@@ -56,6 +62,9 @@ router.get('/summary', protect, adminOnly, async (req, res) => {
           { $match: { paymentStatus: 'paid', createdAt: { $gte: lastMonthStart, $lt: thisMonthStart } } },
           { $group: { _id: null, total: { $sum: '$totalAmount' } } },
         ]),
+        User.countDocuments({ role: 'member', createdAt: { $gte: thirtyDaysAgo } }),
+        Enquiry.countDocuments({ status: 'new' }),
+        User.countDocuments({ role: 'member', isActive: false }),
       ]);
 
       const expiringIn7 = await User.countDocuments({
@@ -82,7 +91,7 @@ router.get('/summary', protect, adminOnly, async (req, res) => {
 
       return {
         totalMembers, activeMembers, expiredMembers, pendingMembers,
-        expiringIn7,
+        expiringIn7, newMembers30d, newEnquiries, disabledMembers,
         totalOrders,
         totalExercises,
         totalDietPlans,
@@ -273,15 +282,6 @@ router.get('/revenue-full', protect, adminOnly, async (req, res) => {
   } catch (err) { res.status(500).json({ message: err.message }); }
 });
 
-// ─── POST /api/analytics/cache-bust ─────────────────────────────────────────
-// Admin: manually bust all analytics + related caches so next request is fresh
-router.post('/cache-bust', protect, adminOnly, (req, res) => {
-  cache.delPattern('analytics:');
-  cache.delPattern('members:');
-  cache.delPattern('orders:');
-  res.json({ message: 'Cache cleared. Next page load will fetch fresh data.' });
-});
-
 // ─── POST /api/analytics/reset-to-production ─────────────────────────────────
 // Admin: full production reset — wipes ALL transactional data.
 // Deletes: ALL members, ALL orders, ALL notifications, ALL progress entries,
@@ -332,40 +332,6 @@ router.post('/reset-to-production', protect, adminOnly, async (req, res) => {
         enquiries:       enquiriesDeleted,
         transformations: transformsDeleted,
       },
-    });
-  } catch (err) {
-    res.status(500).json({ message: err.message });
-  }
-});
-
-// ─── POST /api/analytics/clear-fake-data ─────────────────────────────────────
-// Legacy alias → now calls the full reset under the hood (same behaviour, stricter).
-// Kept for backwards compat with any existing calls from the frontend.
-router.post('/clear-fake-data', protect, adminOnly, async (req, res) => {
-  try {
-    const { confirm } = req.body;
-    if (confirm !== 'DELETE_FAKE_DATA') {
-      return res.status(400).json({
-        message: 'Send { confirm: "DELETE_FAKE_DATA" } in the request body to confirm.',
-      });
-    }
-    // Re-use the production reset logic
-    const [membersDeleted, ordersDeleted, notifsDeleted, progressDeleted, enquiriesDeleted, transformsDeleted] = await Promise.all([
-      User.deleteMany({ role: 'member' }).then(r => r.deletedCount),
-      Order.deleteMany({}).then(r => r.deletedCount),
-      Notification.deleteMany({}).then(r => r.deletedCount),
-      ProgressEntry.deleteMany({}).then(r => r.deletedCount),
-      Enquiry.deleteMany({}).then(r => r.deletedCount),
-      Transformation.deleteMany({}).then(r => r.deletedCount),
-    ]);
-    cache.delPattern('analytics:');
-    cache.delPattern('members:');
-    cache.delPattern('orders:');
-    cache.delPattern('notifications:');
-    cache.delPattern('enquiries:');
-    res.json({
-      message: 'All demo/fake data cleared. Ready to add real data.',
-      deleted: { members: membersDeleted, orders: ordersDeleted, notifications: notifsDeleted, progress: progressDeleted, enquiries: enquiriesDeleted, transformations: transformsDeleted },
     });
   } catch (err) {
     res.status(500).json({ message: err.message });

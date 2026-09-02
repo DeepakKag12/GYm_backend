@@ -48,12 +48,20 @@ const apiLimiter = rateLimit({
 });
 
 // ── Response-time header ───────────────────────────────────────────────────────
+// Must be stamped in writeHead, not on 'finish': by the time 'finish' fires the
+// headers are already on the wire, so setHeader() threw ERR_HTTP_HEADERS_SENT
+// from an event handler — an uncaught exception that killed the process on
+// every single request.
 app.use((req, res, next) => {
   const start = process.hrtime.bigint();
-  res.on('finish', () => {
-    const ms = Number(process.hrtime.bigint() - start) / 1e6;
-    res.setHeader('X-Response-Time', `${ms.toFixed(1)}ms`);
-  });
+  const writeHead = res.writeHead;
+  res.writeHead = function (...args) {
+    if (!res.headersSent) {
+      const ms = Number(process.hrtime.bigint() - start) / 1e6;
+      this.setHeader('X-Response-Time', `${ms.toFixed(1)}ms`);
+    }
+    return writeHead.apply(this, args);
+  };
   next();
 });
 
@@ -66,14 +74,33 @@ const allowedOrigins = (process.env.ALLOWED_ORIGINS || '')
   .map(s => s.trim())
   .filter(Boolean);
 
+// Local development origins are always allowed off-production. Without this the
+// only way to run the frontend against this API was to add localhost to the
+// deployed ALLOWED_ORIGINS, which meant production trusted a developer laptop.
+const isLocalOrigin = origin =>
+  /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin);
+
+const isProduction = process.env.NODE_ENV === 'production';
+
+function isOriginAllowed(origin) {
+  if (!origin) return true;                       // curl, server-to-server, health checks
+  if (allowedOrigins.includes(origin)) return true;
+  if (allowedOrigins.length === 0) return true;   // unconfigured: don't lock everyone out
+  if (!isProduction && isLocalOrigin(origin)) return true;
+  return false;
+}
+
 const corsOptions = {
   origin: function (origin, callback) {
-    // Allow server-to-server requests (no origin) and listed origins
-    if (!origin || allowedOrigins.length === 0 || allowedOrigins.includes(origin)) {
-      callback(null, true);
-    } else {
-      callback(new Error('Not allowed by CORS'));
-    }
+    if (isOriginAllowed(origin)) return callback(null, true);
+
+    // Deliberately NOT `callback(new Error(...))`. Passing an Error here makes
+    // Express answer the preflight with a 500, which is what made every login
+    // from an unlisted origin look like a dead backend instead of a blocked
+    // origin. Returning false simply omits the CORS headers: the browser
+    // refuses the request with a real CORS message, and the server stays 2xx.
+    console.warn(`[CORS] blocked origin: ${origin}`);
+    return callback(null, false);
   },
   credentials: true,
   optionsSuccessStatus: 204,
@@ -109,7 +136,14 @@ async function connectDB() {
     dbError = new Error('MONGO_URI environment variable is not set');
     throw dbError;
   }
-  await mongoose.connect(process.env.MONGO_URI, { serverSelectionTimeoutMS: 10000 });
+  await mongoose.connect(process.env.MONGO_URI, {
+    serverSelectionTimeoutMS: 10000,
+    // Each serverless instance keeps its own pool; the driver's default of 100
+    // multiplied by every warm lambda is how an Atlas cluster runs out of
+    // connections. A handful per instance is plenty for this traffic.
+    maxPoolSize: 10,
+    minPoolSize: 0,
+  });
   isConnected = true;
   dbError = null;
   console.log('✅ MongoDB connected');
@@ -146,13 +180,16 @@ app.use('/api/trainers',     require('./routes/trainers'));
 app.use('/api/analytics',    require('./routes/analytics'));
 app.use('/api/progress',     require('./routes/progress'));
 app.use('/api/plans',        require('./routes/plans'));
+app.use('/api/settings',     require('./routes/settings'));
 app.use('/api/splits',       require('./routes/splits'));
 app.use('/api/cron',         require('./routes/cron'));
 
 // ── Cache stats health endpoint ────────────────────────────────────────────────
+// Hit rate is the number worth watching: if it sits low, either the TTLs are
+// too short or this instance is being recycled before the cache warms up.
 app.get('/api/_cache/stats', (req, res) => {
-  const cache = require('./utils/cache');
-  res.json({ entries: cache.size() });
+  res.set('Cache-Control', 'no-store');
+  res.json(require('./utils/cache').getStats());
 });
 
 // Return JSON 404 for any unmatched /api/* routes (prevents HTML 404 confusing the frontend)
@@ -169,6 +206,15 @@ app.use((err, req, res, next) => {
   const status = err.status || err.statusCode || 500;
   res.status(status).json({ message: err.message || 'Internal server error' });
 });
+
+// ── Notification channel report ───────────────────────────────────────────────
+// Print on boot which delivery channels are live, so a missing Twilio/SMTP env
+// var shows up here instead of as a silently undelivered reminder at 09:00.
+{
+  const { channelHealth } = require('./services/notify');
+  const h = channelHealth();
+  console.log(`🔔 Notifications — website: on | whatsapp: ${h.whatsapp.configured ? `on (${h.whatsapp.from})` : `OFF (${h.whatsapp.reason})`} | email: ${h.email.configured ? `on (${h.email.from})` : `OFF (${h.email.reason})`}`);
+}
 
 // Start cron jobs for fee reminders — skip in serverless (Vercel) environment
 if (process.env.VERCEL !== '1') {

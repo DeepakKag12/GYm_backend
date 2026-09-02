@@ -13,4 +13,9 @@ const transformationSchema = new mongoose.Schema({
   uploadedBy:   { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
 }, { timestamps: true });
 
+// ── Performance indexes ────────────────────────────────────────────────────────
+// Public gallery (isPublic + newest first) and the admin list.
+transformationSchema.index({ isPublic: 1, createdAt: -1 });
+transformationSchema.index({ createdAt: -1 });
+
 module.exports = mongoose.model('Transformation', transformationSchema);

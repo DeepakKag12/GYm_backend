@@ -4,6 +4,7 @@ const Exercise = require('../models/Exercise');
 const cloudinary = require('../config/cloudinary');
 const { protect, trainerOrAdmin } = require('../middleware/auth');
 const cache = require('../utils/cache');
+const { publicCache } = require('../middleware/publicCache');
 
 // POST /api/exercises/sign-upload
 // Returns a short-lived Cloudinary signature so the browser can upload
@@ -13,13 +14,34 @@ router.post('/sign-upload', protect, trainerOrAdmin, (req, res) => {
   if (!cfg.cloud_name || !cfg.api_key || !cfg.api_secret) {
     return res.status(500).json({ message: 'Cloudinary not configured on server.' });
   }
+
   const { folder = 'exercises/videos', resource_type = 'video' } = req.body;
-  const timestamp = Math.round(Date.now() / 1000);
-  const paramsToSign = { folder, timestamp };
+
+  /**
+   * Cloudinary signs EVERY upload parameter except file, api_key, cloud_name
+   * and resource_type. The client used to add `video_codec` and `quality` to
+   * the form for videos while the server signed only { folder, timestamp } —
+   * so the signature never matched and every video upload was rejected as
+   * "Invalid Signature" while images (which sent no extras) worked fine.
+   *
+   * The signed set is now built here and returned to the client, which sends
+   * back exactly these fields and nothing else. The two sides cannot drift.
+   */
+  const paramsToSign = { folder, timestamp: Math.round(Date.now() / 1000) };
+
+  if (resource_type === 'video') {
+    // Let Cloudinary pick the codec and compression on ingest.
+    paramsToSign.quality = 'auto';
+    paramsToSign.video_codec = 'auto';
+  }
+
   const signature = cloudinary.utils.api_sign_request(paramsToSign, cfg.api_secret);
+
   res.json({
     signature,
-    timestamp,
+    // Everything the client must append to the FormData, already signed.
+    params: paramsToSign,
+    timestamp: paramsToSign.timestamp,
     folder,
     resource_type,
     api_key: cfg.api_key,
@@ -66,7 +88,7 @@ async function uploadToCloudinary(file, options = {}) {
 }
 
 // GET /api/exercises?muscleGroup=chest&public=true
-router.get('/', async (req, res) => {
+router.get('/', publicCache(60), async (req, res) => {
   try {
     let query = {};
     if (req.query.muscleGroup) query.muscleGroup = req.query.muscleGroup;
@@ -110,7 +132,6 @@ router.get('/', async (req, res) => {
       exercises = await Exercise.find(query).populate('uploadedBy', 'name role').sort({ createdAt: -1 }).lean();
     }
 
-    if (cacheKey) res.set('Cache-Control', 'public, max-age=90, stale-while-revalidate=180');
     res.json(exercises);
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -134,14 +155,13 @@ router.get('/my', protect, async (req, res) => {
 });
 
 // GET /api/exercises/:id
-router.get('/:id', async (req, res) => {
+router.get('/:id', publicCache(120), async (req, res) => {
   try {
     const cacheKey = `exercises:item:${req.params.id}`;
     const ex = await cache.getOrSet(cacheKey, 120, () =>
       Exercise.findById(req.params.id).populate('uploadedBy', 'name role').lean()
     );
     if (!ex) return res.status(404).json({ message: 'Exercise not found' });
-    res.set('Cache-Control', 'public, max-age=120, stale-while-revalidate=240');
     res.json(ex);
   } catch (err) {
     res.status(500).json({ message: err.message });

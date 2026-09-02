@@ -14,4 +14,8 @@ const progressEntrySchema = new mongoose.Schema({
   photo:    { type: String },          // Cloudinary URL
 }, { timestamps: true });
 
+// ── Performance indexes ────────────────────────────────────────────────────────
+// Every read is "this member's entries, newest first".
+progressEntrySchema.index({ member: 1, date: -1 });
+
 module.exports = mongoose.model('ProgressEntry', progressEntrySchema);

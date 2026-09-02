@@ -1,102 +1,42 @@
 /**
- * /api/cron/fee-reminder
+ * GET /api/cron/fee-reminder
  *
- * Called by Vercel Cron (schedule defined in vercel.json) every day at 9 AM UTC.
- * Also works as a regular HTTP GET — protected by CRON_SECRET so only Vercel
- * (or the admin) can trigger it manually.
+ * Called by Vercel Cron (schedule in vercel.json) daily at 09:00 UTC.
+ * Vercel sends the secret as `Authorization: Bearer <CRON_SECRET>`.
  *
- * Set CRON_SECRET=<some_random_string> in your Vercel environment variables.
- * Vercel automatically passes it as the Authorization: Bearer <secret> header.
+ * The sweep itself lives in services/feeReminder.js and is shared with the
+ * local node-cron job in jobs/feeReminder.js.
  */
 const express = require('express');
 const router = express.Router();
-const User = require('../models/User');
-const Notification = require('../models/Notification');
-const { sendWhatsApp } = require('../utils/whatsapp');
+const { runFeeReminderSweep } = require('../services/feeReminder');
 
-// GET /api/cron/test-whatsapp?to=91XXXXXXXXXX — admin quick test (only works when CRON_SECRET matches)
-router.get('/test-whatsapp', async (req, res) => {
+/**
+ * Previously: `if (secret) { ...check... }` — so with CRON_SECRET unset the
+ * endpoint was wide open and anyone could trigger a full WhatsApp send at will.
+ * Now a missing secret fails closed.
+ */
+function requireCronSecret(req, res, next) {
   const secret = process.env.CRON_SECRET;
-  if (secret) {
-    const auth = req.headers['authorization'] || '';
-    if (auth !== `Bearer ${secret}`) {
-      return res.status(401).json({ message: 'Unauthorized — pass Authorization: Bearer <CRON_SECRET>' });
-    }
-  }
-
-  const { to } = req.query;
-  if (!to) return res.status(400).json({ message: 'Pass ?to=91XXXXXXXXXX in the URL' });
-
-  const { sendWhatsApp } = require('../utils/whatsapp');
-  const sent = await sendWhatsApp(to, '*FITNATION BY AJEET*\n\nThis is a test message from your gym app. ✅');
-  res.json({ sent, to, message: sent ? 'WhatsApp delivered!' : 'Failed — check server logs for the exact Twilio error code' });
-});
-
-router.get('/fee-reminder', async (req, res) => {
-  // Verify secret so random people can't spam-trigger reminders
-  const secret = process.env.CRON_SECRET;
-  if (secret) {
-    const auth = req.headers['authorization'] || '';
-    if (auth !== `Bearer ${secret}`) {
-      return res.status(401).json({ message: 'Unauthorized' });
-    }
-  }
-
-  try {
-    const now = new Date();
-
-    const members = await User.find({
-      role: 'member',
-      membershipStatus: 'active',
-      membershipEnd: { $exists: true }
+  if (!secret) {
+    return res.status(503).json({
+      message: 'CRON_SECRET is not configured on the server; cron endpoint disabled.',
     });
+  }
+  if ((req.headers.authorization || '') !== `Bearer ${secret}`) {
+    return res.status(401).json({ message: 'Unauthorized' });
+  }
+  next();
+}
 
-    let notified = 0;
-
-    for (const member of members) {
-      const daysLeft = Math.ceil((new Date(member.membershipEnd) - now) / (1000 * 60 * 60 * 24));
-      let shouldNotify = false;
-      let notifType = 'fee-reminder';
-      let title = '';
-      let message = '';
-
-      if (daysLeft <= 0 && !member.reminderSentExpiry) {
-        shouldNotify = true;
-        notifType = 'membership-expired';
-        title = '🚨 Membership Expired';
-        message = `Dear ${member.name}, your FitNation by Ajeet membership has expired. Please renew to continue your fitness journey. Contact us: ${process.env.ADMIN_WHATSAPP || ''}`;
-        member.membershipStatus = 'expired';
-        member.reminderSentExpiry = true;
-      } else if (daysLeft <= 3 && daysLeft > 0 && !member.reminderSent3days) {
-        shouldNotify = true;
-        title = '⚠️ Membership Expiring Soon';
-        message = `Dear ${member.name}, your FitNation by Ajeet membership is expiring in ${daysLeft} day(s) on ${new Date(member.membershipEnd).toLocaleDateString('en-IN')}. Renew now to avoid interruption!`;
-        member.reminderSent3days = true;
-      } else if (daysLeft <= 7 && daysLeft > 3 && !member.reminderSent7days) {
-        shouldNotify = true;
-        title = '📅 Membership Reminder';
-        message = `Dear ${member.name}, your FitNation by Ajeet membership expires in ${daysLeft} days on ${new Date(member.membershipEnd).toLocaleDateString('en-IN')}. Plan your renewal today!`;
-        member.reminderSent7days = true;
-      }
-
-      if (shouldNotify) {
-        const notif = await Notification.create({ member: member._id, type: notifType, title, message, sentVia: ['website'] });
-
-        const waNum = member.whatsapp || member.phone;
-        if (waNum) {
-          const sent = await sendWhatsApp(waNum, `*FITNATION BY AJEET*\n\n${message}`);
-          if (sent) {
-            notif.sentVia.push('whatsapp');
-            await notif.save();
-          }
-        }
-        await member.save();
-        notified++;
-      }
-    }
-
-    console.log(`✅ Cron fee-reminder: notified ${notified} member(s)`);
-    res.json({ ok: true, notified });
+router.get('/fee-reminder', requireCronSecret, async (req, res) => {
+  try {
+    // Two scheduled runs a day (see vercel.json). The slot keeps them apart so
+    // both are delivered, while a retry of either one is not.
+    const slot = req.query.slot === 'pm' ? 'pm' : 'am';
+    const result = await runFeeReminderSweep({ slot });
+    console.log(`✅ Cron fee-reminder [${result.slot}]: notified ${result.notified} (whatsapp ${result.whatsapp}, email ${result.email}), failed ${result.failed}`);
+    res.json({ ok: true, ...result });
   } catch (err) {
     console.error('❌ Cron fee-reminder error:', err.message);
     res.status(500).json({ message: err.message });

@@ -18,4 +18,9 @@ const workoutSplitSchema = new mongoose.Schema({
   isActive:  { type: Boolean, default: true },
 }, { timestamps: true });
 
+// ── Performance indexes ────────────────────────────────────────────────────────
+// Admin list (newest first) and the per-member lookup used by the planner.
+workoutSplitSchema.index({ createdAt: -1 });
+workoutSplitSchema.index({ member: 1, createdAt: -1 });
+
 module.exports = mongoose.model('WorkoutSplit', workoutSplitSchema);
