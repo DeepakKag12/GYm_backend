@@ -152,6 +152,17 @@ const corsOptions = {
   },
   credentials: true,
   optionsSuccessStatus: 204,
+  /**
+   * Let the browser remember a preflight for ten minutes.
+   *
+   * Every authenticated call carries an Authorization header, which makes it a
+   * "non-simple" request, which means an OPTIONS round trip first. With no
+   * max-age the browser asked again before EVERY request — two trips for one
+   * screen load, and on a serverless backend each preflight is one more chance
+   * to land on a cold instance. Ten minutes is short enough that a change to
+   * the allowed origins or headers propagates within a session.
+   */
+  maxAge: 600,
 };
 
 app.use(cors(corsOptions));
