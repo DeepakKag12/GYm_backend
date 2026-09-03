@@ -27,7 +27,7 @@ router.get('/', async (req, res) => {
     const trainers = await cache.getOrSet(TRAINERS_CACHE_KEY, 180, () =>
       User.find({ role: 'trainer', isActive: true }).select('-password').lean()
     );
-    res.set('Cache-Control', 'public, max-age=180, stale-while-revalidate=360');
+    res.set('Cache-Control', 'private, max-age=180, stale-while-revalidate=360');
     res.json(trainers);
   } catch (err) { sendDbError(res, err); }
 });

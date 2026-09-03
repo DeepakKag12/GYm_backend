@@ -13,7 +13,7 @@ router.get('/', async (req, res) => {
     const plans = await cache.getOrSet(PLANS_CACHE_KEY, 300, () =>
       MembershipPlan.find({ isActive: true }).sort({ price: 1 }).lean()
     );
-    res.set('Cache-Control', 'public, max-age=300, stale-while-revalidate=600');
+    res.set('Cache-Control', 'private, max-age=300, stale-while-revalidate=600');
     res.json(plans);
   } catch (err) { sendDbError(res, err); }
 });

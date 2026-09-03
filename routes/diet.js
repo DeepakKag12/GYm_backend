@@ -51,7 +51,7 @@ router.get('/', async (req, res) => {
       plans = await cache.getOrSet(cacheKey, 90, () =>
         DietPlan.find(query).populate('uploadedBy', 'name').sort({ createdAt: -1 }).lean()
       );
-      res.set('Cache-Control', 'public, max-age=90, stale-while-revalidate=180');
+      res.set('Cache-Control', 'private, max-age=90, stale-while-revalidate=180');
     } else {
       plans = await DietPlan.find(query).populate('uploadedBy', 'name').sort({ createdAt: -1 }).lean();
     }
@@ -85,7 +85,7 @@ router.get('/:id', async (req, res) => {
       DietPlan.findById(req.params.id).populate('uploadedBy', 'name').lean()
     );
     if (!plan) return res.status(404).json({ message: 'Diet plan not found' });
-    res.set('Cache-Control', 'public, max-age=120, stale-while-revalidate=240');
+    res.set('Cache-Control', 'private, max-age=120, stale-while-revalidate=240');
     res.json(plan);
   } catch (err) {
     sendDbError(res, err);
