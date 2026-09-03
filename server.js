@@ -126,40 +126,91 @@ app.get('/', (req, res) => {
   res.json({ status: 'ok', message: 'FitnessByAjeet API is running' });
 });
 
-// MongoDB connection — connect once, reuse connection across serverless invocations
-let isConnected = false;
-let dbError = null;
+/**
+ * MongoDB connection, shaped for serverless.
+ *
+ * A lambda is frozen between requests, not torn down, so the connection is
+ * cached on the module and reused by every later invocation on that instance.
+ *
+ * Three things this has to get right, each of which was previously wrong and
+ * each of which looked like "the database is not connecting" in production:
+ *
+ *   1. Requests must WAIT for the connection. connectDB() used to be fired at
+ *      module load without being awaited, and the guard below only checked
+ *      whether an error had been recorded. On a cold start the first request
+ *      sailed past a still-connecting mongoose, and the query sat in Mongoose's
+ *      buffer until it gave up — "buffering timed out after 10000ms".
+ *
+ *   2. A failure must be retryable. The first failed attempt used to set a
+ *      module-level dbError that nothing ever cleared, and connectDB was never
+ *      called again. One transient blip on a cold start — an Atlas failover, a
+ *      slow DNS lookup — and that instance answered 503 to every request for
+ *      the rest of its life. Only a redeploy brought it back. The promise is
+ *      now dropped on failure, so the very next request tries again.
+ *
+ *   3. Concurrent cold starts must not each dial out. Caching the promise
+ *      rather than a boolean means ten simultaneous requests share one connect.
+ */
+let connPromise = null;
 
-async function connectDB() {
-  if (isConnected) return;
+function connectDB() {
+  // 1 = connected. Anything else and we (re)establish, which also covers an
+  // instance whose connection dropped while it was frozen.
+  if (mongoose.connection.readyState === 1) return Promise.resolve(mongoose.connection);
+
   if (!process.env.MONGO_URI) {
-    dbError = new Error('MONGO_URI environment variable is not set');
-    throw dbError;
+    return Promise.reject(new Error('MONGO_URI environment variable is not set'));
   }
-  await mongoose.connect(process.env.MONGO_URI, {
-    serverSelectionTimeoutMS: 10000,
-    // Each serverless instance keeps its own pool; the driver's default of 100
-    // multiplied by every warm lambda is how an Atlas cluster runs out of
-    // connections. A handful per instance is plenty for this traffic.
-    maxPoolSize: 10,
-    minPoolSize: 0,
-  });
-  isConnected = true;
-  dbError = null;
-  console.log('✅ MongoDB connected');
+
+  if (!connPromise) {
+    connPromise = mongoose.connect(process.env.MONGO_URI, {
+      // Comfortably inside the platform's function timeout, so a genuine
+      // outage returns a clean 503 rather than a gateway timeout.
+      serverSelectionTimeoutMS: 8000,
+      // Each serverless instance keeps its own pool; the driver's default of
+      // 100 multiplied by every warm lambda is how an Atlas cluster runs out
+      // of connections. A handful per instance is plenty for this traffic.
+      maxPoolSize: 10,
+      minPoolSize: 0,
+    }).then(m => {
+      console.log('✅ MongoDB connected');
+      return m;
+    }).catch(err => {
+      // Drop the cached promise so the next request retries instead of
+      // inheriting this failure forever.
+      connPromise = null;
+      console.error('MongoDB connection error:', err.message);
+      throw err;
+    });
+  }
+  return connPromise;
 }
 
-connectDB().catch(err => {
-  dbError = err;
-  console.error('MongoDB connection error:', err.message);
+// If the connection drops, forget the cached promise so the next request
+// reconnects rather than querying a dead socket.
+mongoose.connection.on('disconnected', () => {
+  console.warn('MongoDB disconnected — will reconnect on the next request');
+  connPromise = null;
+});
+mongoose.connection.on('error', err => {
+  console.error('MongoDB error:', err.message);
 });
 
-// Middleware: fail fast if DB is not connected instead of waiting 10 s to time out
-app.use('/api', (req, res, next) => {
-  if (dbError) {
-    return res.status(503).json({ message: 'Database unavailable. Check MONGO_URI env var on Vercel.' });
+// Warm the connection at module load so the first real request is not the one
+// paying for it. Failure here is not fatal: the guard below retries.
+connectDB().catch(() => {});
+
+// Every /api request waits for a live connection before touching a model.
+app.use('/api', async (req, res, next) => {
+  try {
+    await connectDB();
+    next();
+  } catch (err) {
+    res.status(503).json({
+      message: 'Database unavailable. Please try again in a moment.',
+      detail: process.env.NODE_ENV === 'production' ? undefined : err.message,
+    });
   }
-  next();
 });
 
 // ── Apply rate limiters before routes ─────────────────────────────────────────
