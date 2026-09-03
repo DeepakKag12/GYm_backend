@@ -69,10 +69,33 @@ app.use((req, res, next) => {
 // credentials:true is incompatible with origin:'*' (CORS spec §3.2).
 // Use a whitelist instead; if you genuinely need a fully public API drop
 // credentials:true and keep origin:'*'.
-const allowedOrigins = (process.env.ALLOWED_ORIGINS || '')
-  .split(',')
-  .map(s => s.trim())
-  .filter(Boolean);
+/**
+ * Where the site is served from.
+ *
+ * Vercel gives a project more than one address — the auto-generated
+ * gym-web-ten-puce.vercel.app and the shorter gym-web.vercel.app both serve
+ * it. ALLOWED_ORIGINS on the deployment listed only the first, so anyone who
+ * had bookmarked the second had every API call refused with no CORS header.
+ * It looked like "some phones can't connect": the site loaded, the API said
+ * no, and clearing the cache changed nothing because the refusal is by origin
+ * on every request.
+ *
+ * The project's own addresses are therefore known here as well as in the env
+ * var, so a deploy fixes it without anyone editing settings. Listed exactly,
+ * never as *.vercel.app: that suffix is shared by every Vercel user, and with
+ * credentials on, a wildcard would let any stranger's site call this API as a
+ * signed-in member.
+ */
+const KNOWN_FRONTEND_ORIGINS = [
+  'https://gym-web-ten-puce.vercel.app',
+  'https://gym-web.vercel.app',
+];
+
+const allowedOrigins = [...new Set([
+  ...KNOWN_FRONTEND_ORIGINS,
+  ...(process.env.FRONTEND_URL ? [process.env.FRONTEND_URL] : []),
+  ...(process.env.ALLOWED_ORIGINS || '').split(','),
+].map(s => s.trim().replace(/\/+$/, '')).filter(Boolean))];
 
 // Local development origins are always allowed off-production. Without this the
 // only way to run the frontend against this API was to add localhost to the
