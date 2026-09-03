@@ -214,7 +214,23 @@ app.use('/api', async (req, res, next) => {
 });
 
 // ── Apply rate limiters before routes ─────────────────────────────────────────
-app.use('/api/auth', authLimiter);
+/**
+ * The strict limiter belongs on the endpoints that ACCEPT credentials, not on
+ * the whole /api/auth namespace.
+ *
+ * It used to cover everything under /api/auth, and that includes GET /auth/me,
+ * which the app calls on every page load. Thirty page loads in fifteen minutes
+ * — an ordinary session on a phone — and the next /auth/me returned 429, which
+ * the client reads as a dead session and bounces to the login screen.
+ *
+ * Worse on a gym's wifi: the limit is keyed by IP, and behind one NAT every
+ * member shares a counter, so a handful of people browsing locked everyone out.
+ *
+ * Brute force is only a risk where a password is guessed, so login and register
+ * keep the strict limit and everything else uses the general one.
+ */
+app.use('/api/auth/login', authLimiter);
+app.use('/api/auth/register', authLimiter);
 app.use('/api', apiLimiter);
 
 // Routes
