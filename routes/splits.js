@@ -3,6 +3,7 @@ const router = express.Router();
 const WorkoutSplit = require('../models/WorkoutSplit');
 const { protect, trainerOrAdmin } = require('../middleware/auth');
 const cache = require('../utils/cache');
+const { sendDbError } = require('../utils/dbError');
 
 const DAYS = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
 
@@ -23,7 +24,7 @@ router.get('/me', protect, async (req, res) => {
       cache.set(cacheKey, split, 120);
     }
     res.json(split);
-  } catch (err) { res.status(500).json({ message: err.message }); }
+  } catch (err) { sendDbError(res, err); }
 });
 
 // ── Personal Planner: member self-manages their own planner split ──────────────
@@ -59,7 +60,7 @@ router.get('/planner', protect, async (req, res) => {
 
     cache.set(cacheKey, split, 60); // cache for 60s
     res.json(split);
-  } catch (err) { res.status(500).json({ message: err.message }); }
+  } catch (err) { sendDbError(res, err); }
 });
 
 // PUT /api/splits/planner — member saves their planner (only updates days array)
@@ -91,7 +92,7 @@ router.put('/planner', protect, async (req, res) => {
     // Update cache with fresh data
     cache.set(`split:planner:${req.user._id}`, populated, 60);
     res.json(populated);
-  } catch (err) { res.status(500).json({ message: err.message }); }
+  } catch (err) { sendDbError(res, err); }
 });
 
 const SPLITS_LIST_KEY = 'splits:all';
@@ -108,7 +109,7 @@ router.get('/', protect, trainerOrAdmin, async (req, res) => {
         .lean()
     );
     res.json(splits);
-  } catch (err) { res.status(500).json({ message: err.message }); }
+  } catch (err) { sendDbError(res, err); }
 });
 
 // POST /api/splits
@@ -119,7 +120,7 @@ router.post('/', protect, trainerOrAdmin, async (req, res) => {
     if (req.body.member) cache.del(`split:assigned:${req.body.member}`);
     cache.del(SPLITS_LIST_KEY);
     res.status(201).json(split);
-  } catch (err) { res.status(500).json({ message: err.message }); }
+  } catch (err) { sendDbError(res, err); }
 });
 
 // PUT /api/splits/:id
@@ -132,7 +133,7 @@ router.put('/:id', protect, trainerOrAdmin, async (req, res) => {
     cache.del(SPLITS_LIST_KEY);
     cache.delPattern('split:assigned:');
     res.json(split);
-  } catch (err) { res.status(500).json({ message: err.message }); }
+  } catch (err) { sendDbError(res, err); }
 });
 
 // DELETE /api/splits/:id
@@ -143,7 +144,7 @@ router.delete('/:id', protect, trainerOrAdmin, async (req, res) => {
     cache.del(SPLITS_LIST_KEY);
     await WorkoutSplit.findByIdAndDelete(req.params.id);
     res.json({ message: 'Deleted' });
-  } catch (err) { res.status(500).json({ message: err.message }); }
+  } catch (err) { sendDbError(res, err); }
 });
 
 module.exports = router;

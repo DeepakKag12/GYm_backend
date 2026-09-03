@@ -5,6 +5,7 @@ const Order = require('../models/Order');
 const Product = require('../models/Product');
 const { protect, adminOnly } = require('../middleware/auth');
 const cache = require('../utils/cache');
+const { sendDbError } = require('../utils/dbError');
 
 // POST /api/orders - Place order
 // Prices and the total are recomputed from the database. Previously the whole
@@ -120,7 +121,7 @@ router.post('/', protect, async (req, res) => {
     cache.delPattern('store:');          // stock changed, so product lists are stale
     res.status(201).json(order);
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendDbError(res, err);
   }
 });
 
@@ -133,7 +134,7 @@ router.get('/my', protect, async (req, res) => {
     );
     res.json(orders);
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendDbError(res, err);
   }
 });
 
@@ -145,7 +146,7 @@ router.get('/', protect, adminOnly, async (req, res) => {
     );
     res.json(orders);
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendDbError(res, err);
   }
 });
 
@@ -207,7 +208,7 @@ router.put('/:id/status', protect, adminOnly, async (req, res) => {
     if (order?.user) cache.del(`orders:member:${order.user}`);
     res.json(order);
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendDbError(res, err);
   }
 });
 

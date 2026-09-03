@@ -10,6 +10,7 @@
 const express = require('express');
 const router = express.Router();
 const { runFeeReminderSweep } = require('../services/feeReminder');
+const { sendDbError } = require('../utils/dbError');
 
 /**
  * Previously: `if (secret) { ...check... }` — so with CRON_SECRET unset the
@@ -39,7 +40,7 @@ router.get('/fee-reminder', requireCronSecret, async (req, res) => {
     res.json({ ok: true, ...result });
   } catch (err) {
     console.error('❌ Cron fee-reminder error:', err.message);
-    res.status(500).json({ message: err.message });
+    sendDbError(res, err);
   }
 });
 

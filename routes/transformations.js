@@ -5,6 +5,7 @@ const cloudinary = require('../config/cloudinary');
 const { protect, trainerOrAdmin } = require('../middleware/auth');
 const cache = require('../utils/cache');
 const { publicCache } = require('../middleware/publicCache');
+const { sendDbError } = require('../utils/dbError');
 
 /** Upload to Cloudinary — buffer-safe (Vercel) + auto image compression */
 async function uploadImage(file, folder = 'transformations') {
@@ -34,7 +35,7 @@ router.get('/', publicCache(60), async (req, res) => {
     );
     res.json(transformations);
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendDbError(res, err);
   }
 });
 
@@ -49,7 +50,7 @@ router.get('/all', protect, trainerOrAdmin, async (req, res) => {
     );
     res.json(transformations);
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendDbError(res, err);
   }
 });
 
@@ -74,7 +75,7 @@ router.post('/', protect, trainerOrAdmin, async (req, res) => {
     cache.delPattern('transformations:');
     res.status(201).json(transformation);
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendDbError(res, err);
   }
 });
 
@@ -109,7 +110,7 @@ router.put('/:id', protect, trainerOrAdmin, async (req, res) => {
     cache.delPattern('transformations:');
     res.json(updated);
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendDbError(res, err);
   }
 });
 
@@ -120,7 +121,7 @@ router.delete('/:id', protect, trainerOrAdmin, async (req, res) => {
     cache.delPattern('transformations:');
     res.json({ message: 'Deleted' });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendDbError(res, err);
   }
 });
 

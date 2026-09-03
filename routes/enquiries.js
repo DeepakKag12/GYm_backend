@@ -77,7 +77,7 @@ router.get('/', protect, adminOnly, async (req, res) => {
     );
     res.json(enquiries);
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendDbError(res, err);
   }
 });
 
@@ -89,7 +89,7 @@ router.put('/:id', protect, adminOnly, async (req, res) => {
     cache.del(ENQUIRIES_KEY);
     res.json(enquiry);
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendDbError(res, err);
   }
 });
 
@@ -172,7 +172,7 @@ router.delete('/:id', protect, adminOnly, async (req, res) => {
     cache.del(ENQUIRIES_KEY);
     res.json({ message: 'Enquiry deleted' });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendDbError(res, err);
   }
 });
 

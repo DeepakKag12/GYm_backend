@@ -4,6 +4,7 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 const cache = require('../utils/cache');
+const { sendDbError } = require('../utils/dbError');
 
 const signToken = (id) => jwt.sign({ id }, process.env.JWT_SECRET, { expiresIn: '30d' });
 
@@ -28,7 +29,7 @@ router.post('/register', async (req, res) => {
     });
     res.status(201).json({ token: signToken(user._id), user: { ...user._doc, password: undefined } });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendDbError(res, err);
   }
 });
 
@@ -54,7 +55,7 @@ router.post('/login', async (req, res) => {
     }
     res.json({ token: signToken(user._id), user: { ...user._doc, password: undefined } });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendDbError(res, err);
   }
 });
 
@@ -83,7 +84,7 @@ router.put('/update-profile', protect, async (req, res) => {
     cache.del(`user:${req.user._id}`);
     res.json({ message: 'Profile updated successfully', user: updated });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendDbError(res, err);
   }
 });
 
@@ -118,7 +119,7 @@ router.put('/update-credentials', protect, async (req, res) => {
     const updated = await User.findById(user._id).select('-password');
     res.json({ message: 'Credentials updated successfully', user: updated });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendDbError(res, err);
   }
 });
 

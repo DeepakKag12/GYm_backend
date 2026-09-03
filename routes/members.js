@@ -73,7 +73,7 @@ router.get('/', protect, adminOnly, async (req, res) => {
         .lean()
     );
     res.json(members);
-  } catch (err) { res.status(500).json({ message: err.message }); }
+  } catch (err) { sendDbError(res, err); }
 });
 
 // GET /api/members/:id — self, or any trainer/admin. Never exposes the hash.
@@ -94,7 +94,7 @@ router.get('/:id', protect, async (req, res) => {
     );
     if (!member) return res.status(404).json({ message: 'Member not found' });
     res.json(member);
-  } catch (err) { res.status(500).json({ message: err.message }); }
+  } catch (err) { sendDbError(res, err); }
 });
 
 // POST /api/members — Admin creates member
@@ -507,7 +507,7 @@ router.post('/bulk-reminder', protect, adminOnly, async (req, res) => {
       count: summary.sent,
       ...summary,
     });
-  } catch (err) { res.status(500).json({ message: err.message }); }
+  } catch (err) { sendDbError(res, err); }
 });
 
 // POST /api/members/:id/send-notification — manual push on every channel at once.
@@ -541,7 +541,7 @@ router.post('/:id/send-notification', protect, adminOnly, async (req, res) => {
       failed,
       results,
     });
-  } catch (err) { res.status(500).json({ message: err.message }); }
+  } catch (err) { sendDbError(res, err); }
 });
 
 module.exports = router;

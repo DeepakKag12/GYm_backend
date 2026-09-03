@@ -3,6 +3,7 @@ const router = express.Router();
 const MembershipPlan = require('../models/MembershipPlan');
 const { protect, adminOnly } = require('../middleware/auth');
 const cache = require('../utils/cache');
+const { sendDbError } = require('../utils/dbError');
 
 const PLANS_CACHE_KEY = 'membership:plans:active';
 
@@ -14,7 +15,7 @@ router.get('/', async (req, res) => {
     );
     res.set('Cache-Control', 'public, max-age=300, stale-while-revalidate=600');
     res.json(plans);
-  } catch (err) { res.status(500).json({ message: err.message }); }
+  } catch (err) { sendDbError(res, err); }
 });
 
 // POST /api/plans - admin
@@ -23,7 +24,7 @@ router.post('/', protect, adminOnly, async (req, res) => {
     const plan = await MembershipPlan.create(req.body);
     cache.del(PLANS_CACHE_KEY);
     res.status(201).json(plan);
-  } catch (err) { res.status(500).json({ message: err.message }); }
+  } catch (err) { sendDbError(res, err); }
 });
 
 // PUT /api/plans/:id
@@ -33,7 +34,7 @@ router.put('/:id', protect, adminOnly, async (req, res) => {
     if (!plan) return res.status(404).json({ message: 'Plan not found' });
     cache.del(PLANS_CACHE_KEY);
     res.json(plan);
-  } catch (err) { res.status(500).json({ message: err.message }); }
+  } catch (err) { sendDbError(res, err); }
 });
 
 // DELETE /api/plans/:id
@@ -43,7 +44,7 @@ router.delete('/:id', protect, adminOnly, async (req, res) => {
     if (!deleted) return res.status(404).json({ message: 'Plan not found' });
     cache.del(PLANS_CACHE_KEY);
     res.json({ message: 'Deleted' });
-  } catch (err) { res.status(500).json({ message: err.message }); }
+  } catch (err) { sendDbError(res, err); }
 });
 
 module.exports = router;

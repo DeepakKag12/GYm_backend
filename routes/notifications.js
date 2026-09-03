@@ -5,6 +5,7 @@ const User = require('../models/User');
 const { protect, adminOnly } = require('../middleware/auth');
 const cache = require('../utils/cache');
 const { notifyMember, notifyMembers, channelHealth, notifKey } = require('../services/notify');
+const { sendDbError } = require('../utils/dbError');
 
 // TTL = 30 s — short so unread badge stays fresh, but avoids hammering DB
 // on every page navigation where Navbar + BottomNav both call this.
@@ -19,7 +20,7 @@ router.get('/', protect, async (req, res) => {
     );
     res.json(notifs);
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendDbError(res, err);
   }
 });
 
@@ -41,7 +42,7 @@ router.get('/admin/all', protect, adminOnly, async (req, res) => {
     );
     res.json(notifs);
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendDbError(res, err);
   }
 });
 
@@ -52,7 +53,7 @@ router.put('/admin/mark-all-read', protect, adminOnly, async (req, res) => {
     cache.del(ADMIN_FEED_KEY);
     res.json({ message: 'All notifications marked as read' });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendDbError(res, err);
   }
 });
 
@@ -86,7 +87,7 @@ router.post('/admin/test', protect, adminOnly, async (req, res) => {
     );
     res.json({ delivered, failed, results, health: channelHealth() });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendDbError(res, err);
   }
 });
 
@@ -136,7 +137,7 @@ router.post('/admin/send', protect, adminOnly, async (req, res) => {
       ...summary,
     });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendDbError(res, err);
   }
 });
 
@@ -148,7 +149,7 @@ router.put('/read-all', protect, async (req, res) => {
     cache.del(notifKey(req.user._id));
     res.json({ message: 'All marked as read' });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendDbError(res, err);
   }
 });
 
@@ -167,7 +168,7 @@ router.put('/:id/read', protect, async (req, res) => {
     cache.del(ADMIN_FEED_KEY);
     res.json(notif);
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendDbError(res, err);
   }
 });
 
@@ -180,7 +181,7 @@ router.delete('/admin/:id', protect, adminOnly, async (req, res) => {
     cache.del(ADMIN_FEED_KEY);
     if (gone.member) cache.del(`notifs:member:${gone.member}`);
     res.json({ message: 'Notification deleted.' });
-  } catch (err) { res.status(500).json({ message: err.message }); }
+  } catch (err) { sendDbError(res, err); }
 });
 
 /**
@@ -208,7 +209,7 @@ router.delete('/admin', protect, adminOnly, async (req, res) => {
     cache.del(ADMIN_FEED_KEY);
     cache.delPattern('notifs:member:');
     res.json({ message: `Deleted ${deletedCount} notification${deletedCount === 1 ? '' : 's'}.`, deletedCount });
-  } catch (err) { res.status(500).json({ message: err.message }); }
+  } catch (err) { sendDbError(res, err); }
 });
 
 module.exports = router;

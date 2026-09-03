@@ -4,6 +4,7 @@ const ProgressEntry = require('../models/ProgressEntry');
 const { protect, adminOnly, trainerOrAdmin } = require('../middleware/auth');
 const cloudinary = require('../config/cloudinary');
 const cache = require('../utils/cache');
+const { sendDbError } = require('../utils/dbError');
 
 /** Upload to Cloudinary — buffer-safe (Vercel) + auto image compression */
 async function uploadPhoto(file) {
@@ -24,7 +25,7 @@ router.get('/me', protect, async (req, res) => {
       ProgressEntry.find({ member: req.user._id }).sort({ date: -1 }).lean()
     );
     res.json(entries);
-  } catch (err) { res.status(500).json({ message: err.message }); }
+  } catch (err) { sendDbError(res, err); }
 });
 
 // GET /api/progress/:memberId  - trainer/admin sees a member's entries
@@ -34,7 +35,7 @@ router.get('/:memberId', protect, trainerOrAdmin, async (req, res) => {
       ProgressEntry.find({ member: req.params.memberId }).sort({ date: -1 }).lean()
     );
     res.json(entries);
-  } catch (err) { res.status(500).json({ message: err.message }); }
+  } catch (err) { sendDbError(res, err); }
 });
 
 // POST /api/progress  - member logs own progress (with optional photo)
@@ -51,7 +52,7 @@ router.post('/', protect, async (req, res) => {
     });
     cache.del(progressKey(req.user._id));
     res.status(201).json(entry);
-  } catch (err) { res.status(500).json({ message: err.message }); }
+  } catch (err) { sendDbError(res, err); }
 });
 
 // DELETE /api/progress/:id
@@ -65,7 +66,7 @@ router.delete('/:id', protect, async (req, res) => {
     await entry.deleteOne();
     cache.del(progressKey(req.user._id));
     res.json({ message: 'Deleted' });
-  } catch (err) { res.status(500).json({ message: err.message }); }
+  } catch (err) { sendDbError(res, err); }
 });
 
 module.exports = router;

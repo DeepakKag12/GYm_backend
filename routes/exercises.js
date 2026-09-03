@@ -5,6 +5,7 @@ const cloudinary = require('../config/cloudinary');
 const { protect, trainerOrAdmin } = require('../middleware/auth');
 const cache = require('../utils/cache');
 const { publicCache } = require('../middleware/publicCache');
+const { sendDbError } = require('../utils/dbError');
 
 // POST /api/exercises/sign-upload
 // Returns a short-lived Cloudinary signature so the browser can upload
@@ -134,7 +135,7 @@ router.get('/', publicCache(60), async (req, res) => {
 
     res.json(exercises);
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendDbError(res, err);
   }
 });
 
@@ -150,7 +151,7 @@ router.get('/my', protect, async (req, res) => {
     );
     res.json(exercises);
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendDbError(res, err);
   }
 });
 
@@ -164,7 +165,7 @@ router.get('/:id', publicCache(120), async (req, res) => {
     if (!ex) return res.status(404).json({ message: 'Exercise not found' });
     res.json(ex);
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendDbError(res, err);
   }
 });
 
@@ -209,7 +210,7 @@ router.post('/', protect, trainerOrAdmin, async (req, res) => {
     cache.delPattern('exercises:');
     res.status(201).json(exercise);
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendDbError(res, err);
   }
 });
 
@@ -260,7 +261,7 @@ router.put('/:id', protect, trainerOrAdmin, async (req, res) => {
     cache.delPattern('exercises:public');
     res.json(updated);
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendDbError(res, err);
   }
 });
 
@@ -278,7 +279,7 @@ router.delete('/:id', protect, trainerOrAdmin, async (req, res) => {
     cache.delPattern('exercises:public');
     res.json({ message: 'Exercise deleted' });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendDbError(res, err);
   }
 });
 

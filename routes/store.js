@@ -5,6 +5,7 @@ const cloudinary = require('../config/cloudinary');
 const { protect, adminOnly } = require('../middleware/auth');
 const cache = require('../utils/cache');
 const { publicCache } = require('../middleware/publicCache');
+const { sendDbError } = require('../utils/dbError');
 
 /** Upload to Cloudinary — buffer-safe (Vercel) + auto image compression */
 async function uploadImage(file, folder = 'store') {
@@ -37,7 +38,7 @@ router.get('/', publicCache(60), async (req, res) => {
     });
     res.json(products);
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendDbError(res, err);
   }
 });
 
@@ -52,7 +53,7 @@ router.get('/:id', publicCache(120), async (req, res) => {
     if (!product) return res.status(404).json({ message: 'Product not found' });
     res.json(product);
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendDbError(res, err);
   }
 });
 
@@ -76,7 +77,7 @@ router.post('/', protect, adminOnly, async (req, res) => {
     cache.delPattern('store:list');
     res.status(201).json(product);
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendDbError(res, err);
   }
 });
 
@@ -115,7 +116,7 @@ router.put('/:id', protect, adminOnly, async (req, res) => {
     cache.delPattern('store:list');
     res.json(product);
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendDbError(res, err);
   }
 });
 
@@ -128,7 +129,7 @@ router.delete('/:id', protect, adminOnly, async (req, res) => {
     cache.delPattern('store:list');
     res.json({ message: 'Product deleted' });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendDbError(res, err);
   }
 });
 
@@ -157,7 +158,7 @@ router.post('/:id/review', protect, async (req, res) => {
     cache.delPattern('store:list');
     res.json(product);
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendDbError(res, err);
   }
 });
 

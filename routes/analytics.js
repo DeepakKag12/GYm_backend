@@ -11,6 +11,7 @@ const Enquiry        = require('../models/Enquiry');
 const Transformation = require('../models/Transformation');
 const { protect, adminOnly } = require('../middleware/auth');
 const cache          = require('../utils/cache');
+const { sendDbError } = require('../utils/dbError');
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 function monthStart(offsetFromNow = 0) {
@@ -115,7 +116,7 @@ router.get('/summary', protect, adminOnly, async (req, res) => {
     });
     res.set('Cache-Control', 'no-store');
     res.json(data);
-  } catch (err) { res.status(500).json({ message: err.message }); }
+  } catch (err) { sendDbError(res, err); }
 });
 
 // ─── GET /api/analytics/revenue-monthly ─────────────────────────────────────
@@ -136,7 +137,7 @@ router.get('/revenue-monthly', protect, adminOnly, async (req, res) => {
     });
     res.set('Cache-Control', 'no-store');
     res.json(data);
-  } catch (err) { res.status(500).json({ message: err.message }); }
+  } catch (err) { sendDbError(res, err); }
 });
 
 // ─── GET /api/analytics/membership-stats ────────────────────────────────────
@@ -150,7 +151,7 @@ router.get('/membership-stats', protect, adminOnly, async (req, res) => {
     );
     res.set('Cache-Control', 'no-store');
     res.json(data);
-  } catch (err) { res.status(500).json({ message: err.message }); }
+  } catch (err) { sendDbError(res, err); }
 });
 
 // ─── GET /api/analytics/new-members-monthly ─────────────────────────────────
@@ -171,7 +172,7 @@ router.get('/new-members-monthly', protect, adminOnly, async (req, res) => {
     });
     res.set('Cache-Control', 'no-store');
     res.json(data);
-  } catch (err) { res.status(500).json({ message: err.message }); }
+  } catch (err) { sendDbError(res, err); }
 });
 
 // ─── GET /api/analytics/revenue-full ────────────────────────────────────────
@@ -288,7 +289,7 @@ router.get('/revenue-full', protect, adminOnly, async (req, res) => {
     }); // end cache.getOrSet
     res.set('Cache-Control', 'no-store');
     res.json(data);
-  } catch (err) { res.status(500).json({ message: err.message }); }
+  } catch (err) { sendDbError(res, err); }
 });
 
 // ─── POST /api/analytics/reset-to-production ─────────────────────────────────
@@ -395,7 +396,7 @@ router.post('/reset-to-production', protect, adminOnly, async (req, res) => {
       },
     });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendDbError(res, err);
   }
 });
 

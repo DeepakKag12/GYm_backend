@@ -4,6 +4,7 @@ const DietPlan = require('../models/DietPlan');
 const cloudinary = require('../config/cloudinary');
 const { protect, trainerOrAdmin } = require('../middleware/auth');
 const cache = require('../utils/cache');
+const { sendDbError } = require('../utils/dbError');
 
 /** Upload to Cloudinary — buffer-safe (Vercel) + auto image compression */
 async function uploadImage(file, folder = 'diet') {
@@ -56,7 +57,7 @@ router.get('/', async (req, res) => {
     }
     res.json(plans);
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendDbError(res, err);
   }
 });
 
@@ -72,7 +73,7 @@ router.get('/my', protect, async (req, res) => {
     );
     res.json(plans);
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendDbError(res, err);
   }
 });
 
@@ -87,7 +88,7 @@ router.get('/:id', async (req, res) => {
     res.set('Cache-Control', 'public, max-age=120, stale-while-revalidate=240');
     res.json(plan);
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendDbError(res, err);
   }
 });
 
@@ -113,7 +114,7 @@ router.post('/', protect, trainerOrAdmin, async (req, res) => {
     cache.delPattern('diet:');
     res.status(201).json(plan);
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendDbError(res, err);
   }
 });
 
@@ -127,7 +128,7 @@ router.put('/:id', protect, trainerOrAdmin, async (req, res) => {
     cache.delPattern('diet:staff');
     res.json(plan);
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendDbError(res, err);
   }
 });
 
@@ -140,7 +141,7 @@ router.delete('/:id', protect, trainerOrAdmin, async (req, res) => {
     cache.delPattern('diet:staff');
     res.json({ message: 'Diet plan deleted' });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    sendDbError(res, err);
   }
 });
 
