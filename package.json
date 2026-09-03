@@ -4,7 +4,7 @@
   "description": "Backend for FitnessByAjeet Gym Management System",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js",
+    "start": "node scripts/freePort.js && node server.js",
     "dev": "node scripts/freePort.js && nodemon server.js",
     "seed": "node seed.js",
     "test:notify": "node scripts/testNotification.js"
