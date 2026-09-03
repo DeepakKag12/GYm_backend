@@ -77,8 +77,20 @@ const allowedOrigins = (process.env.ALLOWED_ORIGINS || '')
 // Local development origins are always allowed off-production. Without this the
 // only way to run the frontend against this API was to add localhost to the
 // deployed ALLOWED_ORIGINS, which meant production trusted a developer laptop.
-const isLocalOrigin = origin =>
-  /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin);
+/**
+ * Origins that count as "this developer's own machine or network".
+ *
+ * localhost alone was not enough. CRA prints an "On Your Network" address —
+ * http://192.168.x.x:3000 — and opening the site through it, or from a phone
+ * on the same wifi, sends that LAN address as the Origin. It was rejected, so
+ * every request died with "No 'Access-Control-Allow-Origin' header", which
+ * the frontend reported as the server being unreachable.
+ *
+ * The three private ranges (RFC 1918) and .local names are unroutable from
+ * the internet, so allowing them here exposes nothing — and this branch is
+ * skipped entirely in production, where only ALLOWED_ORIGINS applies.
+ */
+const isLocalOrigin = origin => /^https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\]|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|[a-z0-9-]+\.local)(?::\d+)?$/i.test(origin);
 
 const isProduction = process.env.NODE_ENV === 'production';
 
@@ -164,9 +176,25 @@ function connectDB() {
 
   if (!connPromise) {
     connPromise = mongoose.connect(process.env.MONGO_URI, {
-      // Comfortably inside the platform's function timeout, so a genuine
-      // outage returns a clean 503 rather than a gateway timeout.
-      serverSelectionTimeoutMS: 8000,
+      /**
+       * Deliberately short, and the reason deployments used to come up with
+       * "database unavailable".
+       *
+       * A cold lambda has one budget for everything: its own init, loading
+       * every route module, the Atlas TLS handshake, and the query. Allowing
+       * 8s for server selection alone left nothing for the rest, so the first
+       * requests after a deploy were killed by the platform before this code
+       * could answer — and the frontend read that as the database being down.
+       *
+       * Four seconds is far more than a healthy Atlas needs, and it leaves
+       * room for the retry below, which is what actually rescues a cold start
+       * that loses its first race.
+       */
+      serverSelectionTimeoutMS: 4000,
+      connectTimeoutMS: 4000,
+      // Long enough for a slow aggregate, short enough that a dead socket is
+      // not held onto across invocations.
+      socketTimeoutMS: 20000,
       // Each serverless instance keeps its own pool; the driver's default of
       // 100 multiplied by every warm lambda is how an Atlas cluster runs out
       // of connections. A handful per instance is plenty for this traffic.
@@ -200,18 +228,56 @@ mongoose.connection.on('error', err => {
 // paying for it. Failure here is not fatal: the guard below retries.
 connectDB().catch(() => {});
 
+/**
+ * Says whether this instance can actually reach the database.
+ *
+ * Deliberately outside the guard above, so it still answers when the database
+ * is unreachable — a health check that goes down with the thing it reports on
+ * is no use. `db` is the mongoose readyState in words.
+ */
+app.get('/api/health', async (req, res) => {
+  const STATE = ['disconnected', 'connected', 'connecting', 'disconnecting'];
+  const started = Date.now();
+  let ok = true, error;
+  try { await connectDB(); } catch (err) { ok = false; error = err.message; }
+  res.set('Cache-Control', 'no-store');
+  res.status(ok ? 200 : 503).json({
+    status: ok ? 'ok' : 'degraded',
+    db: STATE[mongoose.connection.readyState] || 'unknown',
+    mongoUriSet: Boolean(process.env.MONGO_URI),
+    tookMs: Date.now() - started,
+    error,
+  });
+});
+
 // Every /api request waits for a live connection before touching a model.
 app.use('/api', async (req, res, next) => {
   try {
     await connectDB();
     next();
-  } catch (err) {
-    res.status(503).json({
-      message: 'Database unavailable. Please try again in a moment.',
-      detail: process.env.NODE_ENV === 'production' ? undefined : err.message,
-    });
+  } catch (first) {
+    /**
+     * One immediate retry.
+     *
+     * The failure that matters here is a cold start losing its first race to
+     * Atlas — DNS not yet warm, the handshake a little slow. That attempt has
+     * already primed the resolver and the TLS session, so the second one
+     * almost always lands, and it costs the user a moment instead of an
+     * error page. A database that is genuinely down fails twice, quickly, and
+     * still answers well inside the function's budget.
+     */
+    try {
+      await connectDB();
+      return next();
+    } catch (err) {
+      res.status(503).json({
+        message: 'Database unavailable. Please try again in a moment.',
+        detail: process.env.NODE_ENV === 'production' ? undefined : err.message,
+      });
+    }
   }
 });
+
 
 // ── Apply rate limiters before routes ─────────────────────────────────────────
 /**
