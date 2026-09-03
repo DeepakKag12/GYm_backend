@@ -10,6 +10,19 @@ const path = require('path');
 
 const app = express();
 
+
+/**
+ * Behind Vercel (and any proxy) the TCP peer is the proxy, so req.ip is the
+ * proxy's address for every visitor. The rate limiters key on req.ip, which
+ * meant the whole gym shared ONE bucket: 200 requests a minute between every
+ * member on every phone, and thirty failed logins from anyone locked the
+ * login page for everyone. Trusting the first proxy hop makes req.ip the real
+ * client from X-Forwarded-For, which Vercel sets and strips from the client.
+ */
+app.set('trust proxy', 1);
+
+const { enforceJwtSecret, reportJwtSecretAtBoot } = require('./utils/jwtSecret');
+reportJwtSecretAtBoot();
 // ── Security Headers (Helmet) ──────────────────────────────────────────────────
 app.use(helmet({
   crossOriginResourcePolicy: { policy: 'cross-origin' }, // allow Cloudinary images
@@ -318,6 +331,7 @@ app.use('/api', async (req, res, next) => {
  * Brute force is only a risk where a password is guessed, so login and register
  * keep the strict limit and everything else uses the general one.
  */
+app.use('/api/auth', enforceJwtSecret); // weak or missing secret → 503 with the fix, not a forgeable session
 app.use('/api/auth/login', authLimiter);
 app.use('/api/auth/register', authLimiter);
 app.use('/api', apiLimiter);

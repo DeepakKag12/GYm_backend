@@ -1,11 +1,17 @@
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 const cache = require('../utils/cache');
+const { enforcedProblem, FIX } = require('../utils/jwtSecret');
 
 // TTL = 5 minutes. Keeps DB lookups minimal across rapid successive requests.
 const USER_CACHE_TTL = 300;
 
 const protect = async (req, res, next) => {
+  // A token verified against a guessable secret proves nothing. See utils/jwtSecret.js.
+  const secretProblem = enforcedProblem();
+  if (secretProblem) {
+    return res.status(503).json({ message: `Sign-in is disabled until the server is configured. ${secretProblem} ${FIX}` });
+  }
   let token;
   if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
     token = req.headers.authorization.split(' ')[1];
