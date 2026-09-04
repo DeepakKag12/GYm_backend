@@ -128,13 +128,16 @@ const allowedOrigins = [...new Set([
  */
 const isLocalOrigin = origin => /^https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\]|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|[a-z0-9-]+\.local)(?::\d+)?$/i.test(origin);
 
+const VERCEL_FRONTEND_PATTERN = /^https:\/\/(?:[a-z0-9-]+\.)*(?:gym-web|gym-frontend|fitnation|fitnessbyajeet)(?:-[a-z0-9-]+)?\.vercel\.app$/i;
+
 const isProduction = process.env.NODE_ENV === 'production';
 
 function isOriginAllowed(origin) {
   if (!origin) return true;                       // curl, server-to-server, health checks
   if (allowedOrigins.includes(origin)) return true;
   if (allowedOrigins.length === 0) return true;   // unconfigured: don't lock everyone out
-  if (!isProduction && isLocalOrigin(origin)) return true;
+  if (VERCEL_FRONTEND_PATTERN.test(origin)) return true;
+  if (isLocalOrigin(origin)) return true;         // local development / mobile testing
   return false;
 }
 
