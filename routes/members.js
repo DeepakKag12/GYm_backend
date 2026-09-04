@@ -268,7 +268,7 @@ router.put('/:id', protect, adminOnly, async (req, res) => {
           const e = new Error('Member not found'); e.status = 404; throw e;
         }
 
-        if (endMoved && Number(req.body.feeAmount) > 0) {
+        if (endMoved && req.body.feePaid !== false && Number(req.body.feeAmount) > 0) {
           // Keyed on member + new end date, so a resubmitted renewal cannot
           // bank the same fee twice even across separate requests.
           const key = `renewal:${member._id}:${new Date(member.membershipEnd).toISOString()}`;
@@ -466,9 +466,33 @@ router.post('/:id/reminder', protect, adminOnly, async (req, res) => {
 // POST /api/members/run-reminders — admin runs the whole sweep on demand.
 router.post('/run-reminders', protect, adminOnly, async (req, res) => {
   try {
-    const slot = req.body?.slot === 'pm' ? 'pm' : 'am';
-    const result = await runFeeReminderSweep({ slot });
-    res.json({ message: `Reminders sent to ${result.notified} member(s).`, ...result });
+    // Keep older frontend builds working: this is the admin's manual "email
+    // everyone expiring" action, so it must not inherit the cron sweep's
+    // per-slot idempotency and skip members already reminded today.
+    const now = new Date();
+    const cutoff = new Date(now.getTime() + 7 * 86400000);
+    const members = await User.find({
+      role: 'member',
+      isActive: { $ne: false },
+      membershipStatus: 'active',
+      membershipEnd: { $gte: now, $lte: cutoff },
+    });
+    const summary = await notifyMembers(members, member => {
+      const daysLeft = Math.ceil((new Date(member.membershipEnd) - now) / 86400000);
+      return {
+        type: 'fee-reminder',
+        title: `Membership ends in ${daysLeft} day(s)`,
+        subject: `Your ${BRAND} membership expires in ${daysLeft} day(s)`,
+        message: `Dear ${member.name}, your ${BRAND} membership expires in ${daysLeft} day(s) on ${new Date(member.membershipEnd).toLocaleDateString('en-IN')}. Renew now to keep training without a break.`,
+        ctaText: 'Renew membership',
+        ctaUrl: `${process.env.FRONTEND_URL || SITE_URL}/plans`,
+      };
+    }, { channels: ['email'] });
+    res.json({
+      message: `Email sent to ${summary.email} member(s).`,
+      count: summary.email,
+      ...summary,
+    });
   } catch (err) { sendDbError(res, err, 'Could not run the reminder sweep.'); }
 });
 

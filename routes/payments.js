@@ -3,6 +3,7 @@ const router = express.Router();
 const mongoose = require('mongoose');
 const Payment = require('../models/Payment');
 const Order = require('../models/Order');
+const User = require('../models/User');
 const { protect, adminOnly } = require('../middleware/auth');
 const cache = require('../utils/cache');
 const { sendDbError } = require('../utils/dbError');
@@ -75,6 +76,22 @@ router.get('/', protect, adminOnly, async (req, res) => {
       counts: { membership: membership.length, store: store.length },
     });
   } catch (err) { sendDbError(res, err, 'Could not load payments.'); }
+});
+
+// GET /api/payments/due — active members whose current fee is unpaid
+router.get('/due', protect, adminOnly, async (req, res) => {
+  try {
+    const members = await User.find({
+      role: 'member',
+      isActive: { $ne: false },
+      feePaid: false,
+      feeAmount: { $gt: 0 },
+    })
+      .select('name email phone membershipPlan membershipEnd feeAmount membershipStatus')
+      .sort({ membershipEnd: 1, name: 1 })
+      .lean();
+    res.json({ members, total: members.reduce((sum, member) => sum + member.feeAmount, 0) });
+  } catch (err) { sendDbError(res, err, 'Could not load due fees.'); }
 });
 
 // GET /api/payments/summary — totals and a month-by-month breakdown
@@ -151,6 +168,9 @@ router.post('/', protect, adminOnly, async (req, res) => {
       return res.status(400).json({ message: 'Enter an amount greater than zero.' });
     }
 
+    const memberDoc = await User.findOne({ _id: member, role: 'member' });
+    if (!memberDoc) return res.status(404).json({ message: 'Member not found.' });
+
     const payment = await Payment.create({
       member,
       source: 'membership',
@@ -161,10 +181,81 @@ router.post('/', protect, adminOnly, async (req, res) => {
       recordedBy: req.user._id,
     });
 
+    // The current fee model tracks one outstanding amount per member. A desk
+    // payment settles that amount so the member leaves the due list.
+    await User.updateOne({ _id: memberDoc._id }, { $set: { feePaid: true } });
+
     cache.del('payments:summary');
     cache.delPattern('analytics:');
+    cache.del('members:all');
     res.status(201).json({ message: 'Payment recorded.', payment });
   } catch (err) { sendDbError(res, err, 'Could not record this payment.'); }
+});
+
+// POST /api/payments/due — add or replace one member's outstanding fee
+router.post('/due', protect, adminOnly, async (req, res) => {
+  try {
+    const { member, amount } = req.body;
+    if (!mongoose.isValidObjectId(member)) {
+      return res.status(400).json({ message: 'Choose which member owes the fee.' });
+    }
+    if (!(Number(amount) > 0)) {
+      return res.status(400).json({ message: 'Enter a due amount greater than zero.' });
+    }
+
+    const updated = await User.findOneAndUpdate(
+      { _id: member, role: 'member' },
+      { $set: { feeAmount: Number(amount), feePaid: false } },
+      { new: true, runValidators: true },
+    ).select('name email phone membershipPlan membershipEnd feeAmount membershipStatus');
+    if (!updated) return res.status(404).json({ message: 'Member not found.' });
+
+    cache.del('members:all');
+    cache.delPattern('analytics:');
+    res.status(201).json({ message: `Fee due added for ${updated.name}.`, member: updated });
+  } catch (err) { sendDbError(res, err, 'Could not add this due fee.'); }
+});
+
+// POST /api/payments/due/settle — settle the selected members' full due amounts
+router.post('/due/settle', protect, adminOnly, async (req, res) => {
+  try {
+    const memberIds = Array.isArray(req.body.memberIds) ? req.body.memberIds : [];
+    const ids = [...new Set(memberIds.filter(mongoose.isValidObjectId))];
+    if (!ids.length) return res.status(400).json({ message: 'Select at least one due member.' });
+
+    const members = await User.find({
+      _id: { $in: ids }, role: 'member', isActive: { $ne: false },
+      feePaid: false, feeAmount: { $gt: 0 },
+    }).select('name feeAmount membershipStart membershipEnd');
+
+    const payments = [];
+    for (const member of members) {
+      payments.push(await Payment.create({
+        member: member._id,
+        source: 'membership',
+        kind: 'adjustment',
+        amount: member.feeAmount,
+        method: req.body.method || 'cash',
+        note: req.body.note || 'Due fee settled',
+        periodStart: member.membershipStart,
+        periodEnd: member.membershipEnd,
+        recordedBy: req.user._id,
+      }));
+    }
+
+    await User.updateMany(
+      { _id: { $in: members.map(member => member._id) } },
+      { $set: { feePaid: true } },
+    );
+    cache.del('payments:summary');
+    cache.del('members:all');
+    cache.delPattern('analytics:');
+    res.json({
+      message: `${payments.length} due fee${payments.length === 1 ? '' : 's'} marked paid.`,
+      count: payments.length,
+      skipped: ids.length - payments.length,
+    });
+  } catch (err) { sendDbError(res, err, 'Could not settle the selected fees.'); }
 });
 
 
