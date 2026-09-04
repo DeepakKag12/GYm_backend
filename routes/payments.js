@@ -298,40 +298,50 @@ router.post('/due/settle', protect, adminOnly, async (req, res) => {
     const ids = [...new Set(memberIds.filter(mongoose.isValidObjectId))];
     if (!ids.length) return res.status(400).json({ message: 'Select at least one due member.' });
 
-    const members = await User.find({
-      _id: { $in: ids }, role: 'member', isActive: { $ne: false },
-      $or: [
-        { feeDueAmount: { $gt: 0 } },
-        { feePaid: false, feeDueAmount: { $in: [0, null] }, feeAmount: { $gt: 0 } },
-      ],
-    }).select('name feeAmount feeDueAmount membershipStart membershipEnd');
+    const session = await mongoose.startSession();
+    let settledCount = 0;
+    try {
+      await session.withTransaction(async () => {
+        const members = await User.find({
+          _id: { $in: ids }, role: 'member', isActive: { $ne: false },
+          $or: [
+            { feeDueAmount: { $gt: 0 } },
+            { feePaid: false, feeDueAmount: { $in: [0, null] }, feeAmount: { $gt: 0 } },
+          ],
+        }).select('name feeAmount feeDueAmount membershipStart membershipEnd').session(session);
 
-    const payments = [];
-    for (const member of members) {
-      payments.push(await Payment.create({
-        member: member._id,
-        source: 'membership',
-        kind: 'adjustment',
-        amount: member.feeDueAmount > 0 ? member.feeDueAmount : member.feeAmount,
-        method: req.body.method || 'cash',
-        note: req.body.note || 'Due fee settled',
-        periodStart: member.membershipStart,
-        periodEnd: member.membershipEnd,
-        recordedBy: req.user._id,
-      }));
+        for (const member of members) {
+          const amount = member.feeDueAmount > 0 ? member.feeDueAmount : member.feeAmount;
+          await Payment.create([{
+            member: member._id,
+            source: 'membership',
+            kind: 'adjustment',
+            amount,
+            method: req.body.method || 'cash',
+            note: req.body.note || 'Due fee settled',
+            periodStart: member.membershipStart,
+            periodEnd: member.membershipEnd,
+            recordedBy: req.user._id,
+          }], { session });
+        }
+
+        settledCount = members.length;
+        await User.updateMany(
+          { _id: { $in: members.map(member => member._id) } },
+          { $set: { feeDueAmount: 0, feePaid: true } },
+          { session },
+        );
+      });
+    } finally {
+      await session.endSession();
     }
-
-    await User.updateMany(
-      { _id: { $in: members.map(member => member._id) } },
-      { $set: { feeDueAmount: 0, feePaid: true } },
-    );
     cache.del('payments:summary');
     cache.del('members:all');
     cache.delPattern('analytics:');
     res.json({
-      message: `${payments.length} due fee${payments.length === 1 ? '' : 's'} marked paid.`,
-      count: payments.length,
-      skipped: ids.length - payments.length,
+      message: `${settledCount} due fee${settledCount === 1 ? '' : 's'} marked paid.`,
+      count: settledCount,
+      skipped: ids.length - settledCount,
     });
   } catch (err) { sendDbError(res, err, 'Could not settle the selected fees.'); }
 });

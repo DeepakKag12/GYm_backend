@@ -3,7 +3,7 @@ const mongoose = require('mongoose');
 const router = express.Router();
 const bcrypt = require('bcryptjs');
 const User = require('../models/User');
-const { protect, adminOnly } = require('../middleware/auth');
+const { protect, adminOnly, trainerOrAdmin } = require('../middleware/auth');
 const { notifyMember, notifyMembers } = require('../services/notify');
 const { sendDbError } = require('../utils/dbError');
 const { findDuplicate } = require('../utils/duplicateUser');
@@ -59,6 +59,17 @@ function calcExpiry(startDate, plan) {
 }
 
 const MEMBERS_CACHE_KEY = 'members:all';
+
+// GET /api/members/roster — safe member list for trainer dashboards
+router.get('/roster', protect, trainerOrAdmin, async (req, res) => {
+  try {
+    const members = await User.find({ role: 'member' })
+      .select('name membershipPlan membershipStatus membershipStart membershipEnd')
+      .sort({ createdAt: -1 })
+      .lean();
+    res.json(members);
+  } catch (err) { sendDbError(res, err); }
+});
 
 // GET /api/members
 router.get('/', protect, adminOnly, async (req, res) => {

@@ -9,7 +9,7 @@ const Notification   = require('../models/Notification');
 const ProgressEntry  = require('../models/ProgressEntry');
 const Enquiry        = require('../models/Enquiry');
 const Transformation = require('../models/Transformation');
-const { protect, adminOnly } = require('../middleware/auth');
+const { protect, adminOnly, trainerOrAdmin } = require('../middleware/auth');
 const cache          = require('../utils/cache');
 const { sendDbError } = require('../utils/dbError');
 
@@ -119,6 +119,19 @@ router.get('/summary', protect, adminOnly, async (req, res) => {
     });
     res.set('Cache-Control', 'no-store');
     res.json(data);
+  } catch (err) { sendDbError(res, err); }
+});
+
+// GET /api/analytics/trainer-summary — safe counts for the trainer dashboard
+router.get('/trainer-summary', protect, trainerOrAdmin, async (req, res) => {
+  try {
+    const [totalMembers, activeMembers, totalExercises, totalDietPlans] = await Promise.all([
+      User.countDocuments({ role: 'member' }),
+      User.countDocuments({ role: 'member', membershipStatus: 'active' }),
+      Exercise.countDocuments({}),
+      DietPlan.countDocuments({}),
+    ]);
+    res.json({ totalMembers, activeMembers, totalExercises, totalDietPlans });
   } catch (err) { sendDbError(res, err); }
 });
 
