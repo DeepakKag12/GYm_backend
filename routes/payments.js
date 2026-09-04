@@ -139,7 +139,28 @@ router.get('/due', protect, adminOnly, async (req, res) => {
   } catch (err) { sendDbError(res, err, 'Could not load due fees.'); }
 });
 
-// POST /api/payments/:memberId/statement — prepare a PDF for direct sharing
+// GET /api/payments/:memberId/statement — stream the PDF directly to the browser (view / download)
+router.get('/:memberId/statement', protect, adminOnly, async (req, res) => {
+  try {
+    const member = await User.findOne({ _id: req.params.memberId, role: 'member' }).select('-password').lean();
+    if (!member) return res.status(404).json({ message: 'Member not found.' });
+    const payments = await Payment.find({ member: member._id, source: 'membership' })
+      .select('amount method kind createdAt periodStart periodEnd')
+      .sort({ createdAt: 1 })
+      .lean();
+    const pdf = await buildMemberStatement(member, payments);
+    const filename = `${(member.name || 'member').replace(/[^a-z0-9]/gi, '-')}-statement.pdf`;
+    res.set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': `inline; filename="${filename}"`,
+      'Content-Length': pdf.length,
+      'Cache-Control': 'no-store',
+    });
+    res.end(pdf);
+  } catch (err) { sendDbError(res, err, 'Could not generate the member statement.'); }
+});
+
+// POST /api/payments/:memberId/statement — prepare a PDF and upload to Cloudinary for sharing
 router.post('/:memberId/statement', protect, adminOnly, async (req, res) => {
   try {
     const statement = await createStatement(req.params.memberId);
