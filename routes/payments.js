@@ -4,9 +4,39 @@ const mongoose = require('mongoose');
 const Payment = require('../models/Payment');
 const Order = require('../models/Order');
 const User = require('../models/User');
+const cloudinary = require('../config/cloudinary');
 const { protect, adminOnly } = require('../middleware/auth');
 const cache = require('../utils/cache');
 const { sendDbError } = require('../utils/dbError');
+const { sendWhatsApp } = require('../utils/whatsapp');
+const { buildMemberStatement, statementData } = require('../utils/memberStatement');
+
+function uploadStatement(buffer, publicId) {
+  return new Promise((resolve, reject) => {
+    const stream = cloudinary.uploader.upload_stream({
+      resource_type: 'raw',
+      type: 'upload',
+      public_id: publicId,
+      format: 'pdf',
+      access_mode: 'public',
+      overwrite: true,
+      invalidate: true,
+    }, (err, result) => err ? reject(err) : resolve(result));
+    stream.end(buffer);
+  });
+}
+
+async function createStatement(memberId) {
+  const member = await User.findOne({ _id: memberId, role: 'member' }).select('-password').lean();
+  if (!member) return null;
+  const payments = await Payment.find({ member: member._id, source: 'membership' })
+    .select('amount method kind createdAt periodStart periodEnd')
+    .sort({ createdAt: 1 })
+    .lean();
+  const pdf = await buildMemberStatement(member, payments);
+  const upload = await uploadStatement(pdf, `member-statements/${member._id}-${Date.now()}`);
+  return { member, payments, summary: statementData(member, payments), url: upload.secure_url };
+}
 
 /**
  * Money in, separated by where it came from.
@@ -84,14 +114,54 @@ router.get('/due', protect, adminOnly, async (req, res) => {
     const members = await User.find({
       role: 'member',
       isActive: { $ne: false },
-      feePaid: false,
-      feeAmount: { $gt: 0 },
+      $or: [
+        { feeDueAmount: { $gt: 0 } },
+        { feePaid: false, feeDueAmount: { $in: [0, null] }, feeAmount: { $gt: 0 } },
+      ],
     })
-      .select('name email phone membershipPlan membershipEnd feeAmount membershipStatus')
+      .select('name email phone membershipPlan membershipStart membershipEnd feeAmount feeDueAmount membershipStatus feePaid')
       .sort({ membershipEnd: 1, name: 1 })
       .lean();
-    res.json({ members, total: members.reduce((sum, member) => sum + member.feeAmount, 0) });
+    const payments = await Payment.find({
+      source: 'membership', member: { $in: members.map(member => member._id) },
+    }).select('member amount method kind createdAt').sort({ createdAt: 1 }).lean();
+    const paymentsByMember = new Map();
+    payments.forEach(payment => {
+      const key = String(payment.member);
+      paymentsByMember.set(key, [...(paymentsByMember.get(key) || []), payment]);
+    });
+    const dueMembers = members.map(member => ({
+      ...member,
+      ...statementData(member, paymentsByMember.get(String(member._id)) || []),
+      dueAmount: member.feeDueAmount > 0 ? member.feeDueAmount : member.feeAmount,
+    }));
+    res.json({ members: dueMembers, total: dueMembers.reduce((sum, member) => sum + member.dueAmount, 0) });
   } catch (err) { sendDbError(res, err, 'Could not load due fees.'); }
+});
+
+// POST /api/payments/:memberId/statement — prepare a PDF for direct sharing
+router.post('/:memberId/statement', protect, adminOnly, async (req, res) => {
+  try {
+    const statement = await createStatement(req.params.memberId);
+    if (!statement) return res.status(404).json({ message: 'Member not found.' });
+    res.json({ message: 'Statement ready to share.', url: statement.url, member: { name: statement.member.name, phone: statement.member.phone } });
+  } catch (err) { sendDbError(res, err, 'Could not generate the member statement.'); }
+});
+
+// POST /api/payments/:memberId/statement/whatsapp — send a PDF statement
+router.post('/:memberId/statement/whatsapp', protect, adminOnly, async (req, res) => {
+  try {
+    const statement = await createStatement(req.params.memberId);
+    if (!statement) return res.status(404).json({ message: 'Member not found.' });
+    const { member, summary, url } = statement;
+    const result = await sendWhatsApp(
+      member.whatsapp || member.phone,
+      `Hi ${member.name}, here is your FitNation payment statement. Total fee: INR ${summary.totalFee}. Paid: INR ${summary.paidTotal}. Remaining due: INR ${summary.due}.`,
+      { mediaUrl: url },
+    );
+    if (!result.ok) return res.status(502).json({ message: result.error || result.reason || 'Could not send the statement on WhatsApp.', result });
+    res.json({ message: `Statement sent to ${member.name}.`, result, url });
+  } catch (err) { sendDbError(res, err, 'Could not generate or send the member statement.'); }
 });
 
 // GET /api/payments/summary — totals and a month-by-month breakdown
@@ -170,6 +240,10 @@ router.post('/', protect, adminOnly, async (req, res) => {
 
     const memberDoc = await User.findOne({ _id: member, role: 'member' });
     if (!memberDoc) return res.status(404).json({ message: 'Member not found.' });
+    const currentDue = memberDoc.feeDueAmount > 0 ? memberDoc.feeDueAmount : (memberDoc.feePaid ? 0 : memberDoc.feeAmount);
+    if (currentDue > 0 && Number(amount) > currentDue) {
+      return res.status(400).json({ message: `Payment cannot be greater than the remaining due amount of ${currentDue}.` });
+    }
 
     const payment = await Payment.create({
       member,
@@ -183,7 +257,8 @@ router.post('/', protect, adminOnly, async (req, res) => {
 
     // The current fee model tracks one outstanding amount per member. A desk
     // payment settles that amount so the member leaves the due list.
-    await User.updateOne({ _id: memberDoc._id }, { $set: { feePaid: true } });
+    const remaining = Math.max(0, currentDue - Number(amount));
+    await User.updateOne({ _id: memberDoc._id }, { $set: { feeDueAmount: remaining, feePaid: remaining === 0 } });
 
     cache.del('payments:summary');
     cache.delPattern('analytics:');
@@ -205,9 +280,9 @@ router.post('/due', protect, adminOnly, async (req, res) => {
 
     const updated = await User.findOneAndUpdate(
       { _id: member, role: 'member' },
-      { $set: { feeAmount: Number(amount), feePaid: false } },
+      { $set: { feeAmount: Number(amount), feeDueAmount: Number(amount), feePaid: false } },
       { new: true, runValidators: true },
-    ).select('name email phone membershipPlan membershipEnd feeAmount membershipStatus');
+    ).select('name email phone membershipPlan membershipEnd feeAmount feeDueAmount membershipStatus');
     if (!updated) return res.status(404).json({ message: 'Member not found.' });
 
     cache.del('members:all');
@@ -225,8 +300,11 @@ router.post('/due/settle', protect, adminOnly, async (req, res) => {
 
     const members = await User.find({
       _id: { $in: ids }, role: 'member', isActive: { $ne: false },
-      feePaid: false, feeAmount: { $gt: 0 },
-    }).select('name feeAmount membershipStart membershipEnd');
+      $or: [
+        { feeDueAmount: { $gt: 0 } },
+        { feePaid: false, feeDueAmount: { $in: [0, null] }, feeAmount: { $gt: 0 } },
+      ],
+    }).select('name feeAmount feeDueAmount membershipStart membershipEnd');
 
     const payments = [];
     for (const member of members) {
@@ -234,7 +312,7 @@ router.post('/due/settle', protect, adminOnly, async (req, res) => {
         member: member._id,
         source: 'membership',
         kind: 'adjustment',
-        amount: member.feeAmount,
+        amount: member.feeDueAmount > 0 ? member.feeDueAmount : member.feeAmount,
         method: req.body.method || 'cash',
         note: req.body.note || 'Due fee settled',
         periodStart: member.membershipStart,
@@ -245,7 +323,7 @@ router.post('/due/settle', protect, adminOnly, async (req, res) => {
 
     await User.updateMany(
       { _id: { $in: members.map(member => member._id) } },
-      { $set: { feePaid: true } },
+      { $set: { feeDueAmount: 0, feePaid: true } },
     );
     cache.del('payments:summary');
     cache.del('members:all');

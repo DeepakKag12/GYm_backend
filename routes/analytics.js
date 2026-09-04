@@ -93,8 +93,11 @@ router.get('/summary', protect, adminOnly, async (req, res) => {
       const membershipRevenue = membershipFeeRevenue[0]?.total || 0;
 
       const pendingFeeResult = await User.aggregate([
-        { $match: { role: 'member', feePaid: false, membershipStatus: 'active' } },
-        { $group: { _id: null, total: { $sum: '$feeAmount' }, count: { $sum: 1 } } },
+        { $match: { role: 'member', membershipStatus: 'active', $or: [
+          { feeDueAmount: { $gt: 0 } },
+          { feePaid: false, feeDueAmount: { $in: [0, null] }, feeAmount: { $gt: 0 } },
+        ] } },
+        { $group: { _id: null, total: { $sum: { $cond: [{ $gt: ['$feeDueAmount', 0] }, '$feeDueAmount', '$feeAmount'] } }, count: { $sum: 1 } } },
       ]);
       const pendingFees     = pendingFeeResult[0]?.total || 0;
       const pendingFeeCount = pendingFeeResult[0]?.count || 0;

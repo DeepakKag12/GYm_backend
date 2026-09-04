@@ -103,7 +103,7 @@ router.post('/', protect, adminOnly, async (req, res) => {
     const {
       name, email, phone, whatsapp, password,
       membershipPlan, membershipStart, membershipEnd,
-      feeAmount, assignedTrainer, gender, dob, address
+      feeAmount, initialPayment, paymentDue, paymentMethod, assignedTrainer, gender, dob, address
     } = req.body;
 
     // Email *or* phone — checking only the email let the same person be added
@@ -119,6 +119,14 @@ router.post('/', protect, adminOnly, async (req, res) => {
 
     // Auto-calculate expiry if not provided
     const expiry = membershipEnd || calcExpiry(membershipStart, membershipPlan);
+    const totalFee = Math.max(0, Number(feeAmount) || 0);
+    const requestedPayment = initialPayment === undefined || initialPayment === ''
+      ? (paymentDue ? 0 : totalFee)
+      : Math.max(0, Number(initialPayment) || 0);
+    if (requestedPayment > totalFee) {
+      return res.status(400).json({ message: 'Initial payment cannot be greater than the fee amount.' });
+    }
+    const dueAmount = Math.max(0, totalFee - requestedPayment);
 
     // A blank password means "use their mobile number" — the number is already
     // required, and it gives the member something they can sign in with without
@@ -146,20 +154,22 @@ router.post('/', protect, adminOnly, async (req, res) => {
           membershipPlan,
           membershipStart,
           membershipEnd: expiry,
-          feeAmount,
+          feeAmount: totalFee,
+          feeDueAmount: dueAmount,
           assignedTrainer: assignedTrainer || undefined,
           gender, dob, address,
           membershipStatus: 'active',
-          feePaid: true,
+          feePaid: dueAmount === 0,
         }], { session });
         member = created;
 
-        if (Number(feeAmount) > 0) {
+        if (requestedPayment > 0) {
           await Payment.create([{
             member: member._id,
             source: 'membership',
             kind: 'new-membership',
-            amount: Number(feeAmount),
+            amount: requestedPayment,
+            method: paymentMethod || 'cash',
             periodStart: member.membershipStart,
             periodEnd: member.membershipEnd,
             recordedBy: req.user._id,
@@ -188,7 +198,7 @@ router.put('/:id', protect, adminOnly, async (req, res) => {
     const ALLOWED = [
       'name', 'email', 'phone', 'whatsapp', 'address', 'dob', 'gender', 'avatar',
       'membershipPlan', 'membershipStart', 'membershipEnd', 'membershipStatus',
-      'feePaid', 'feeAmount', 'assignedTrainer', 'isActive',
+      'feePaid', 'feeAmount', 'feeDueAmount', 'assignedTrainer', 'isActive',
     ];
     const update = {};
     for (const k of ALLOWED) {
@@ -233,6 +243,15 @@ router.put('/:id', protect, adminOnly, async (req, res) => {
       update.reminderSent7days  = false;
       update.reminderSent3days  = false;
       update.reminderSentExpiry = false;
+      const renewalFee = Math.max(0, Number(req.body.feeAmount) || 0);
+      const renewalPayment = req.body.initialPayment === undefined || req.body.initialPayment === ''
+        ? (req.body.feePaid === false ? 0 : renewalFee)
+        : Math.max(0, Number(req.body.initialPayment) || 0);
+      if (renewalPayment > renewalFee) {
+        return res.status(400).json({ message: 'Payment cannot be greater than the renewal fee.' });
+      }
+      update.feeDueAmount = Math.max(0, renewalFee - renewalPayment);
+      update.feePaid = update.feeDueAmount === 0;
 
       // An expired member given a future end date is a renewed member. Without
       // this they stayed marked "expired" — shown in red, still swept by the
@@ -268,16 +287,17 @@ router.put('/:id', protect, adminOnly, async (req, res) => {
           const e = new Error('Member not found'); e.status = 404; throw e;
         }
 
-        if (endMoved && req.body.feePaid !== false && Number(req.body.feeAmount) > 0) {
+        if (endMoved && Number(req.body.initialPayment || 0) > 0) {
           // Keyed on member + new end date, so a resubmitted renewal cannot
           // bank the same fee twice even across separate requests.
-          const key = `renewal:${member._id}:${new Date(member.membershipEnd).toISOString()}`;
+          const key = `renewal:${member._id}:${new Date(member.membershipEnd).toISOString()}:${Number(req.body.initialPayment)}`;
           try {
             await Payment.create([{
               member: member._id,
               source: 'membership',
               kind: current.membershipEnd ? 'renewal' : 'new-membership',
-              amount: Number(req.body.feeAmount),
+              amount: Number(req.body.initialPayment),
+              method: req.body.paymentMethod || 'cash',
               periodStart: member.membershipStart,
               periodEnd: member.membershipEnd,
               recordedBy: req.user._id,

@@ -22,6 +22,9 @@ const userSchema = new mongoose.Schema({
   membershipStatus: { type: String, enum: ['active', 'expired', 'pending'], default: 'pending' },
   feePaid:      { type: Boolean, default: false },
   feeAmount:    { type: Number, default: 0 },
+  // Remaining balance for the current membership period. Legacy records use
+  // feeAmount when feeDueAmount is zero and feePaid is false.
+  feeDueAmount: { type: Number, default: 0, min: 0 },
   assignedTrainer: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   // Notification preferences — respected by services/notify.js on every send
   notifyWhatsApp: { type: Boolean, default: true },
