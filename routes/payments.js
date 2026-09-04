@@ -248,69 +248,148 @@ router.get('/summary', protect, adminOnly, async (req, res) => {
   } catch (err) { sendDbError(res, err, 'Could not load the payment summary.'); }
 });
 
-// POST /api/payments — record a payment by hand (a fee taken at the desk)
+// POST /api/payments — record a payment by hand (a fee taken at the desk or partial/full due settlement)
 router.post('/', protect, adminOnly, async (req, res) => {
   try {
     const { member, amount, kind, method, note } = req.body;
     if (!mongoose.isValidObjectId(member)) {
       return res.status(400).json({ message: 'Choose which member paid.' });
     }
-    if (!(Number(amount) > 0)) {
+    const payNum = Number(amount);
+    if (!(payNum > 0)) {
       return res.status(400).json({ message: 'Enter an amount greater than zero.' });
     }
 
     const memberDoc = await User.findOne({ _id: member, role: 'member' });
     if (!memberDoc) return res.status(404).json({ message: 'Member not found.' });
     const currentDue = memberDoc.feeDueAmount > 0 ? memberDoc.feeDueAmount : (memberDoc.feePaid ? 0 : memberDoc.feeAmount);
-    if (currentDue > 0 && Number(amount) > currentDue) {
-      return res.status(400).json({ message: `Payment cannot be greater than the remaining due amount of ${currentDue}.` });
+    if (currentDue > 0 && payNum > currentDue) {
+      return res.status(400).json({ message: `Payment cannot be greater than the remaining due amount of ₹${currentDue}.` });
     }
 
     const payment = await Payment.create({
       member,
       source: 'membership',
       kind: ['new-membership', 'renewal', 'adjustment'].includes(kind) ? kind : 'adjustment',
-      amount: Number(amount),
+      amount: payNum,
       method: method || 'cash',
       note,
       recordedBy: req.user._id,
     });
 
     // The current fee model tracks one outstanding amount per member. A desk
-    // payment settles that amount so the member leaves the due list.
-    const remaining = Math.max(0, currentDue - Number(amount));
+    // payment settles that amount so the member leaves the due list if completely settled.
+    const remaining = Math.max(0, currentDue - payNum);
     await User.updateOne({ _id: memberDoc._id }, { $set: { feeDueAmount: remaining, feePaid: remaining === 0 } });
 
     cache.del('payments:summary');
     cache.delPattern('analytics:');
     cache.del('members:all');
-    res.status(201).json({ message: 'Payment recorded.', payment });
+    res.status(201).json({
+      message: remaining > 0
+        ? `Payment of ₹${payNum.toLocaleString('en-IN')} recorded. Remaining due: ₹${remaining.toLocaleString('en-IN')}.`
+        : `Payment of ₹${payNum.toLocaleString('en-IN')} recorded. Fee marked fully paid.`,
+      payment,
+      remaining,
+    });
   } catch (err) { sendDbError(res, err, 'Could not record this payment.'); }
 });
 
-// POST /api/payments/due — add or replace one member's outstanding fee
+// POST /api/payments/due — add or setup one member's outstanding fee (with optional initial payment)
 router.post('/due', protect, adminOnly, async (req, res) => {
   try {
-    const { member, amount } = req.body;
+    const { member, amount, paidAmount, method, note } = req.body;
     if (!mongoose.isValidObjectId(member)) {
       return res.status(400).json({ message: 'Choose which member owes the fee.' });
     }
-    if (!(Number(amount) > 0)) {
+    const totalAmount = Number(amount);
+    if (!(totalAmount > 0)) {
       return res.status(400).json({ message: 'Enter a due amount greater than zero.' });
     }
 
-    const updated = await User.findOneAndUpdate(
-      { _id: member, role: 'member' },
-      { $set: { feeAmount: Number(amount), feeDueAmount: Number(amount), feePaid: false } },
-      { new: true, runValidators: true },
-    ).select('name email phone membershipPlan membershipEnd feeAmount feeDueAmount membershipStatus');
-    if (!updated) return res.status(404).json({ message: 'Member not found.' });
+    const memberDoc = await User.findOne({ _id: member, role: 'member' });
+    if (!memberDoc) return res.status(404).json({ message: 'Member not found.' });
 
+    const paid = Number(paidAmount || 0);
+    if (paid < 0) {
+      return res.status(400).json({ message: 'Paid amount cannot be negative.' });
+    }
+    if (paid > totalAmount) {
+      return res.status(400).json({ message: 'Paid amount cannot be greater than the total fee amount.' });
+    }
+
+    let payment = null;
+    if (paid > 0) {
+      payment = await Payment.create({
+        member: memberDoc._id,
+        source: 'membership',
+        kind: 'adjustment',
+        amount: paid,
+        method: method || 'cash',
+        note: note || 'Payment on due fee setup',
+        recordedBy: req.user._id,
+      });
+    }
+
+    const remaining = Math.max(0, totalAmount - paid);
+    memberDoc.feeAmount = Math.max(Number(memberDoc.feeAmount || 0), totalAmount);
+    memberDoc.feeDueAmount = remaining;
+    memberDoc.feePaid = remaining === 0;
+    await memberDoc.save();
+
+    cache.del('payments:summary');
     cache.del('members:all');
     cache.delPattern('analytics:');
-    res.status(201).json({ message: `Fee due added for ${updated.name}.`, member: updated });
+
+    res.status(201).json({
+      message: paid > 0
+        ? `Paid ₹${paid.toLocaleString('en-IN')} added to revenue. Remaining ₹${remaining.toLocaleString('en-IN')} kept as due for ${memberDoc.name}.`
+        : `Fee due of ₹${totalAmount.toLocaleString('en-IN')} added for ${memberDoc.name}.`,
+      member: memberDoc,
+      payment,
+      remaining,
+      paid,
+    });
   } catch (err) { sendDbError(res, err, 'Could not add this due fee.'); }
 });
+
+// PATCH / PUT /api/payments/due/:memberId — directly edit or adjust a member's due fee
+const handleUpdateDue = async (req, res) => {
+  try {
+    const { memberId } = req.params;
+    const { dueAmount } = req.body;
+    if (!mongoose.isValidObjectId(memberId)) {
+      return res.status(400).json({ message: 'Invalid member ID.' });
+    }
+    const newDue = Number(dueAmount);
+    if (isNaN(newDue) || newDue < 0) {
+      return res.status(400).json({ message: 'Due amount must be a number greater than or equal to 0.' });
+    }
+
+    const memberDoc = await User.findOne({ _id: memberId, role: 'member' });
+    if (!memberDoc) return res.status(404).json({ message: 'Member not found.' });
+
+    memberDoc.feeDueAmount = newDue;
+    memberDoc.feePaid = newDue === 0;
+    if (newDue > Number(memberDoc.feeAmount || 0)) {
+      memberDoc.feeAmount = newDue;
+    }
+    await memberDoc.save();
+
+    cache.del('payments:summary');
+    cache.del('members:all');
+    cache.delPattern('analytics:');
+
+    res.json({
+      message: `Due amount for ${memberDoc.name} updated to ₹${newDue.toLocaleString('en-IN')}.`,
+      member: memberDoc,
+      dueAmount: newDue,
+    });
+  } catch (err) { sendDbError(res, err, 'Could not update due amount.'); }
+};
+
+router.patch('/due/:memberId', protect, adminOnly, handleUpdateDue);
+router.put('/due/:memberId', protect, adminOnly, handleUpdateDue);
 
 // POST /api/payments/due/settle — settle the selected members' full due amounts
 router.post('/due/settle', protect, adminOnly, async (req, res) => {

@@ -7,10 +7,19 @@
       "config": {
         "maxLambdaSize": "50mb",
         "maxDuration": 60,
-        "memory": 1024
+        "memory": 1024,
+        "includeFiles": [
+          "node_modules/pdfkit/**",
+          "node_modules/fontkit/**"
+        ]
       }
     }
   ],
+  "functions": {
+    "server.js": {
+      "includeFiles": "node_modules/pdfkit/**"
+    }
+  },
   "routes": [
     {
       "src": "/(.*)",

@@ -211,14 +211,12 @@ router.get('/revenue-full', protect, adminOnly, async (req, res) => {
       { $sort: { '_id.year': 1, '_id.month': 1 } },
     ]);
 
-    // Membership fee revenue by month (based on membershipStart)
-    // Note: $gte filter on membershipStart is optional — members without a start date
-    // (or with null) are excluded from monthly breakdown but counted in totals below.
-    const membershipByMonth = await User.aggregate([
-      { $match: { role: 'member', feePaid: true, membershipStart: { $gte: twelveMonthsAgo, $ne: null } } },
+    // Membership fee revenue by month (based on payments recorded)
+    const membershipByMonth = await Payment.aggregate([
+      { $match: { source: 'membership', createdAt: { $gte: twelveMonthsAgo } } },
       { $group: {
-          _id:               { year: { $year: '$membershipStart' }, month: { $month: '$membershipStart' } },
-          membershipRevenue: { $sum: '$feeAmount' },
+          _id:               { year: { $year: '$createdAt' }, month: { $month: '$createdAt' } },
+          membershipRevenue: { $sum: '$amount' },
           memberCount:       { $sum: 1 },
         },
       },

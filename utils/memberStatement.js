@@ -1,5 +1,15 @@
 const PDFDocument = require('pdfkit');
 
+// Force Vercel NFT (Node File Trace) to bundle standard fonts used by PDFKit
+try {
+  require('pdfkit/standard-fonts/Helvetica');
+  require('pdfkit/standard-fonts/HelveticaBold');
+  require('pdfkit/standard-fonts/HelveticaOblique');
+  require('pdfkit/standard-fonts/HelveticaBoldOblique');
+  require('pdfkit/standard-fonts/Courier');
+  require('pdfkit/standard-fonts/TimesRoman');
+} catch (_) {}
+
 const PLAN_MONTHS = { monthly: 1, quarterly: 3, 'half-yearly': 6, yearly: 12 };
 
 function money(value) {
