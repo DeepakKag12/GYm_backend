@@ -7,8 +7,8 @@ const cache = require('../utils/cache');
 const { publicCache } = require('../middleware/publicCache');
 const { sendDbError } = require('../utils/dbError');
 
-/** Upload to Cloudinary — buffer-safe (Vercel) + auto image compression */
-async function uploadImage(file, folder = 'transformations') {
+/** Upload media (image/video) to Cloudinary — buffer-safe (Vercel) */
+async function uploadMedia(file, folder = 'transformations', resourceType = 'image') {
   const cfg = cloudinary.config();
   if (!cfg.cloud_name || !cfg.api_key || !cfg.api_secret) {
     throw new Error(
@@ -16,7 +16,11 @@ async function uploadImage(file, folder = 'transformations') {
       'CLOUDINARY_API_SECRET to your Vercel environment variables and redeploy.'
     );
   }
-  const opts = { folder, quality: 'auto', fetch_format: 'auto' };
+  const opts = { folder, resource_type: resourceType };
+  if (resourceType === 'image') {
+    opts.quality = 'auto';
+    opts.fetch_format = 'auto';
+  }
   if (file.tempFilePath) return cloudinary.uploader.upload(file.tempFilePath, opts);
   return new Promise((resolve, reject) => {
     const stream = cloudinary.uploader.upload_stream(opts, (err, r) => err ? reject(err) : resolve(r));
@@ -57,18 +61,23 @@ router.get('/all', protect, trainerOrAdmin, async (req, res) => {
 // POST /api/transformations
 router.post('/', protect, trainerOrAdmin, async (req, res) => {
   try {
-    let beforeImage = '', afterImage = '';
+    let beforeImage = '', afterImage = '', video = '';
     if (req.files?.beforeImage) {
-      const r = await uploadImage(req.files.beforeImage, 'transformations');
+      const r = await uploadMedia(req.files.beforeImage, 'transformations', 'image');
       beforeImage = r.secure_url;
     }
     if (req.files?.afterImage) {
-      const r = await uploadImage(req.files.afterImage, 'transformations');
+      const r = await uploadMedia(req.files.afterImage, 'transformations', 'image');
       afterImage = r.secure_url;
+    }
+    if (req.files?.video) {
+      const r = await uploadMedia(req.files.video, 'transformations/videos', 'video');
+      video = r.secure_url;
     }
     const transformation = await Transformation.create({
       ...req.body,
-      beforeImage, afterImage,
+      beforeImage, afterImage, video,
+      videoUrl: req.body.videoUrl || '',
       uploadedBy: req.user._id,
       isPublic: req.body.isPublic === 'false' ? false : true,
     });
@@ -87,14 +96,19 @@ router.put('/:id', protect, trainerOrAdmin, async (req, res) => {
 
     let beforeImage = t.beforeImage;
     let afterImage  = t.afterImage;
+    let video       = t.video || '';
 
     if (req.files?.beforeImage) {
-      const r = await uploadImage(req.files.beforeImage, 'transformations');
+      const r = await uploadMedia(req.files.beforeImage, 'transformations', 'image');
       beforeImage = r.secure_url;
     }
     if (req.files?.afterImage) {
-      const r = await uploadImage(req.files.afterImage, 'transformations');
+      const r = await uploadMedia(req.files.afterImage, 'transformations', 'image');
       afterImage = r.secure_url;
+    }
+    if (req.files?.video) {
+      const r = await uploadMedia(req.files.video, 'transformations/videos', 'video');
+      video = r.secure_url;
     }
 
     const updated = await Transformation.findByIdAndUpdate(
@@ -103,6 +117,8 @@ router.put('/:id', protect, trainerOrAdmin, async (req, res) => {
         ...req.body,
         beforeImage,
         afterImage,
+        video,
+        videoUrl: req.body.videoUrl !== undefined ? req.body.videoUrl : t.videoUrl,
         isPublic: req.body.isPublic === 'false' ? false : req.body.isPublic === 'true' ? true : t.isPublic,
       },
       { new: true }
