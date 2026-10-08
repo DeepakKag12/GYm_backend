@@ -12,6 +12,7 @@ const {
 } = require('../controllers/analytics.controller');
 const { protect, adminOnly, trainerOrAdmin } = require('../middlewares/auth.middleware');
 
+router.get('/', protect, adminOnly, getSummary);
 router.get('/summary', protect, adminOnly, getSummary);
 router.get('/trainer-summary', protect, trainerOrAdmin, getTrainerSummary);
 router.get('/revenue-monthly', protect, adminOnly, getRevenueMonthly);

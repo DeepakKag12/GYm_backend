@@ -10,7 +10,10 @@ const { buildOrderInvoice } = require('../utils/memberStatement');
 // POST /api/orders - Place order
 const placeOrder = asyncHandler(async (req, res) => {
   try {
-    const { items, shippingAddress, paymentMethod, notes } = req.body;
+    const { items, shippingAddress, notes } = req.body;
+    let paymentMethod = (req.body.paymentMethod || 'cod').toString().toLowerCase();
+    if (paymentMethod === 'cash_on_delivery') paymentMethod = 'cod';
+
     if (!Array.isArray(items) || items.length === 0) {
       return res.status(400).json({ message: 'Order must contain at least one item' });
     }

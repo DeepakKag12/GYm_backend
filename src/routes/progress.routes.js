@@ -8,6 +8,7 @@ const {
   deleteProgressEntry,
 } = require('../controllers/progress.controller');
 
+router.get('/', protect, getMyProgress);
 router.get('/me', protect, getMyProgress);
 router.get('/:memberId', protect, trainerOrAdmin, getMemberProgress);
 router.post('/', protect, createProgressEntry);
