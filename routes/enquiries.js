@@ -52,7 +52,7 @@ router.post('/', async (req, res) => {
     cache.del(ENQUIRIES_KEY);
 
     // Alert the gym on WhatsApp + email so a lead isn't missed until someone
-    // happens to open the admin panel. Fire-and-forget: a Twilio/SMTP hiccup
+    // happens to open the admin panel. Fire-and-forget: a Meta/SMTP hiccup
     // must never fail the visitor's form submission.
     notifyAdmin({
       title: `New enquiry from ${enquiry.name}`,

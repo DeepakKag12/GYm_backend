@@ -36,10 +36,10 @@ const orderSchema = new mongoose.Schema({
     pincode: String,
   },
   totalAmount:  { type: Number, required: true },
-  paymentMethod: { type: String, enum: ['cod', 'online', 'upi'], default: 'cod' },
+  paymentMethod: { type: String, enum: ['cod', 'cash', 'online', 'upi', 'card', 'other'], default: 'cod' },
   paymentStatus: { type: String, enum: ['pending', 'paid', 'failed'], default: 'pending' },
-  // Gym-pickup order flow: placed → confirmed → ready → collected → cancelled
-  orderStatus:   { type: String, enum: ['placed', 'confirmed', 'ready', 'collected', 'cancelled'], default: 'placed' },
+  // Gym-pickup order flow: placed → confirmed/processing → ready/ready_for_pickup → collected/delivered → cancelled
+  orderStatus:   { type: String, enum: ['placed', 'confirmed', 'processing', 'ready', 'ready_for_pickup', 'collected', 'delivered', 'cancelled'], default: 'placed' },
   notes:        { type: String },
 }, { timestamps: true });
 

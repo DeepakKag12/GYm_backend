@@ -27,10 +27,11 @@ async function uploadImage(file, folder = 'store') {
 // GET /api/store?category=protein
 router.get('/', publicCache(60), async (req, res) => {
   try {
-    const { category, featured, search } = req.query;
-    const cacheKey = `store:list:${category || ''}:${featured || ''}:${search || ''}`;
+    const { category, featured, search, all } = req.query;
+    const showAll = all === '1' || all === 'true';
+    const cacheKey = `store:list:${category || ''}:${featured || ''}:${search || ''}:${showAll ? 'all' : 'active'}`;
     const products = await cache.getOrSet(cacheKey, 60, async () => {
-      let query = { isActive: true };
+      let query = showAll ? {} : { isActive: true };
       if (category) query.category = category;
       if (featured) query.isFeatured = true;
       if (search) query.name = { $regex: search, $options: 'i' };
@@ -57,6 +58,20 @@ router.get('/:id', publicCache(120), async (req, res) => {
   }
 });
 
+function safeArray(val) {
+  if (!val) return [];
+  if (Array.isArray(val)) return val;
+  if (typeof val === 'string') {
+    try {
+      const parsed = JSON.parse(val);
+      if (Array.isArray(parsed)) return parsed;
+    } catch {
+      return val.split(',').map(s => s.trim()).filter(Boolean);
+    }
+  }
+  return [];
+}
+
 // POST /api/store - admin adds product
 router.post('/', protect, adminOnly, async (req, res) => {
   try {
@@ -68,12 +83,41 @@ router.post('/', protect, adminOnly, async (req, res) => {
         images.push(result.secure_url);
       }
     }
-    const product = await Product.create({
+    const createData = {
       ...req.body,
       images,
-      flavors: req.body.flavors ? JSON.parse(req.body.flavors) : [],
-      weights: req.body.weights ? JSON.parse(req.body.weights) : [],
-    });
+      flavors: safeArray(req.body.flavors),
+      weights: safeArray(req.body.weights),
+    };
+    if (createData.isActive !== undefined) {
+      createData.isActive = !(createData.isActive === 'false' || createData.isActive === false);
+    }
+    if (createData.isFeatured !== undefined) {
+      createData.isFeatured = createData.isFeatured === 'true' || createData.isFeatured === true;
+    }
+    if (createData.price !== undefined) {
+      createData.price = Number(createData.price);
+      if (Number.isNaN(createData.price) || createData.price < 0) {
+        return res.status(400).json({ message: 'Price must be a valid non-negative number.' });
+      }
+    }
+    if (createData.discountPrice !== undefined && createData.discountPrice !== '') {
+      createData.discountPrice = Number(createData.discountPrice);
+      if (Number.isNaN(createData.discountPrice) || createData.discountPrice < 0) {
+        return res.status(400).json({ message: 'Discount price must be a valid non-negative number.' });
+      }
+      if (createData.price !== undefined && createData.discountPrice > createData.price) {
+        return res.status(400).json({ message: 'Discount price cannot exceed the original price.' });
+      }
+    }
+    if (createData.stock !== undefined && createData.stock !== '') {
+      createData.stock = Number(createData.stock);
+      if (Number.isNaN(createData.stock) || createData.stock < 0) {
+        return res.status(400).json({ message: 'Stock must be a valid non-negative number.' });
+      }
+    }
+
+    const product = await Product.create(createData);
     cache.delPattern('store:list');
     res.status(201).json(product);
   } catch (err) {
@@ -85,13 +129,9 @@ router.post('/', protect, adminOnly, async (req, res) => {
 router.put('/:id', protect, adminOnly, async (req, res) => {
   try {
     const update = { ...req.body };
-    // Handle arrays that come as JSON strings
-    if (typeof update.flavors === 'string') {
-      try { update.flavors = JSON.parse(update.flavors); } catch { update.flavors = update.flavors.split(',').map(s => s.trim()).filter(Boolean); }
-    }
-    if (typeof update.weights === 'string') {
-      try { update.weights = JSON.parse(update.weights); } catch { update.weights = update.weights.split(',').map(s => s.trim()).filter(Boolean); }
-    }
+    if (update.flavors !== undefined) update.flavors = safeArray(update.flavors);
+    if (update.weights !== undefined) update.weights = safeArray(update.weights);
+
     // New images uploaded
     if (req.files?.images) {
       const files = Array.isArray(req.files.images) ? req.files.images : [req.files.images];
@@ -109,6 +149,27 @@ router.put('/:id', protect, adminOnly, async (req, res) => {
     }
     if (update.isFeatured !== undefined) {
       update.isFeatured = update.isFeatured === 'true' || update.isFeatured === true;
+    }
+    if (update.price !== undefined) {
+      update.price = Number(update.price);
+      if (Number.isNaN(update.price) || update.price < 0) {
+        return res.status(400).json({ message: 'Price must be a valid non-negative number.' });
+      }
+    }
+    if (update.discountPrice !== undefined && update.discountPrice !== '') {
+      update.discountPrice = Number(update.discountPrice);
+      if (Number.isNaN(update.discountPrice) || update.discountPrice < 0) {
+        return res.status(400).json({ message: 'Discount price must be a valid non-negative number.' });
+      }
+      if (update.price !== undefined && update.discountPrice > update.price) {
+        return res.status(400).json({ message: 'Discount price cannot exceed the original price.' });
+      }
+    }
+    if (update.stock !== undefined && update.stock !== '') {
+      update.stock = Number(update.stock);
+      if (Number.isNaN(update.stock) || update.stock < 0) {
+        return res.status(400).json({ message: 'Stock must be a valid non-negative number.' });
+      }
     }
     const product = await Product.findByIdAndUpdate(req.params.id, update, { new: true });
     if (!product) return res.status(404).json({ message: 'Product not found' });

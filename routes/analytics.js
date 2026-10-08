@@ -74,23 +74,32 @@ router.get('/summary', protect, adminOnly, async (req, res) => {
         membershipEnd: { $gte: now, $lte: new Date(now.getTime() + 7 * 86400000) },
       });
 
-      const revenue          = revenueAgg[0]?.total          || 0;
-      const monthlyRevenue   = monthlyRevenueAgg[0]?.total   || 0;
-      const lastMonthRevenue = lastMonthRevenueAgg[0]?.total || 0;
+      const storeRevenue          = revenueAgg[0]?.total          || 0;
+      const storeMonthlyRevenue   = monthlyRevenueAgg[0]?.total   || 0;
+      const storeLastMonthRevenue = lastMonthRevenueAgg[0]?.total || 0;
 
-      /**
-       * Membership income comes from the Payment ledger, not from summing each
-       * member's current feeAmount.
-       *
-       * The old sum counted a member once at whatever they are charged today,
-       * so a year of renewals still read as one month's fee, and income could
-       * not be attributed to a month.
-       */
-      const membershipFeeRevenue = await Payment.aggregate([
-        { $match: { source: 'membership' } },
-        { $group: { _id: null, total: { $sum: '$amount' } } },
+      const [membershipFeeRevenue, membershipMonthAgg, membershipLastMonthAgg] = await Promise.all([
+        Payment.aggregate([
+          { $match: { source: 'membership' } },
+          { $group: { _id: null, total: { $sum: '$amount' } } },
+        ]),
+        Payment.aggregate([
+          { $match: { source: 'membership', createdAt: { $gte: thisMonthStart } } },
+          { $group: { _id: null, total: { $sum: '$amount' } } },
+        ]),
+        Payment.aggregate([
+          { $match: { source: 'membership', createdAt: { $gte: lastMonthStart, $lt: thisMonthStart } } },
+          { $group: { _id: null, total: { $sum: '$amount' } } },
+        ]),
       ]);
-      const membershipRevenue = membershipFeeRevenue[0]?.total || 0;
+
+      const membershipRevenue          = membershipFeeRevenue[0]?.total     || 0;
+      const membershipMonthlyRevenue   = membershipMonthAgg[0]?.total       || 0;
+      const membershipLastMonthRevenue = membershipLastMonthAgg[0]?.total   || 0;
+
+      const totalRevenue               = storeRevenue + membershipRevenue;
+      const totalMonthlyRevenue        = storeMonthlyRevenue + membershipMonthlyRevenue;
+      const totalLastMonthRevenue      = storeLastMonthRevenue + membershipLastMonthRevenue;
 
       const pendingFeeResult = await User.aggregate([
         { $match: { role: 'member', membershipStatus: 'active', $or: [
@@ -109,10 +118,12 @@ router.get('/summary', protect, adminOnly, async (req, res) => {
         totalExercises,
         totalDietPlans,
         totalTrainers,
-        revenue,
-        monthlyRevenue,
-        lastMonthRevenue,
+        revenue: totalRevenue,
+        monthlyRevenue: totalMonthlyRevenue,
+        lastMonthRevenue: totalLastMonthRevenue,
+        storeRevenue,
         membershipRevenue,
+        membershipMonthlyRevenue,
         pendingFees,
         pendingFeeCount,
       };
@@ -140,16 +151,43 @@ router.get('/revenue-monthly', protect, adminOnly, async (req, res) => {
   try {
     const data = await cache.getOrSet('analytics:revenue-monthly', 30, async () => {
       const sixMonthsAgo = monthStart(-5);
-      return Order.aggregate([
-        { $match: { createdAt: { $gte: sixMonthsAgo }, paymentStatus: 'paid' } },
-        { $group: {
-            _id:     { year: { $year: '$createdAt' }, month: { $month: '$createdAt' } },
-            revenue: { $sum: '$totalAmount' },
-            orders:  { $sum: 1 },
+      const [orderRows, paymentRows] = await Promise.all([
+        Order.aggregate([
+          { $match: { createdAt: { $gte: sixMonthsAgo }, paymentStatus: 'paid' } },
+          { $group: {
+              _id:     { year: { $year: '$createdAt' }, month: { $month: '$createdAt' } },
+              revenue: { $sum: '$totalAmount' },
+              orders:  { $sum: 1 },
+            },
           },
-        },
-        { $sort: { '_id.year': 1, '_id.month': 1 } },
+        ]),
+        Payment.aggregate([
+          { $match: { createdAt: { $gte: sixMonthsAgo }, source: 'membership' } },
+          { $group: {
+              _id:     { year: { $year: '$createdAt' }, month: { $month: '$createdAt' } },
+              revenue: { $sum: '$amount' },
+              payments: { $sum: 1 },
+            },
+          },
+        ]),
       ]);
+
+      const map = new Map();
+      orderRows.forEach(r => {
+        const key = `${r._id.year}-${r._id.month}`;
+        map.set(key, { _id: r._id, revenue: r.revenue || 0, orders: r.orders || 0 });
+      });
+      paymentRows.forEach(r => {
+        const key = `${r._id.year}-${r._id.month}`;
+        const existing = map.get(key) || { _id: r._id, revenue: 0, orders: 0 };
+        existing.revenue += (r.revenue || 0);
+        map.set(key, existing);
+      });
+
+      return Array.from(map.values()).sort((a, b) => {
+        if (a._id.year !== b._id.year) return a._id.year - b._id.year;
+        return a._id.month - b._id.month;
+      });
     });
     res.set('Cache-Control', 'no-store');
     res.json(data);
@@ -251,16 +289,41 @@ router.get('/revenue-full', protect, adminOnly, async (req, res) => {
       },
     ]);
 
-    // Payment method breakdown from orders
-    const paymentMethodBreakdown = await Order.aggregate([
-      { $match: { paymentStatus: 'paid' } },
-      { $group: {
-          _id:     '$paymentMethod',
-          revenue: { $sum: '$totalAmount' },
-          count:   { $sum: 1 },
+    // Payment method breakdown from both orders and membership payments
+    const [orderMethods, paymentMethods] = await Promise.all([
+      Order.aggregate([
+        { $match: { paymentStatus: 'paid' } },
+        { $group: {
+            _id:     '$paymentMethod',
+            revenue: { $sum: '$totalAmount' },
+            count:   { $sum: 1 },
+          },
         },
-      },
+      ]),
+      Payment.aggregate([
+        { $match: { source: 'membership' } },
+        { $group: {
+            _id:     '$method',
+            revenue: { $sum: '$amount' },
+            count:   { $sum: 1 },
+          },
+        },
+      ]),
     ]);
+
+    const methodMap = new Map();
+    orderMethods.forEach(m => {
+      const k = m._id || 'other';
+      methodMap.set(k, { _id: k, revenue: m.revenue || 0, count: m.count || 0 });
+    });
+    paymentMethods.forEach(m => {
+      const k = m._id || 'other';
+      const existing = methodMap.get(k) || { _id: k, revenue: 0, count: 0 };
+      existing.revenue += (m.revenue || 0);
+      existing.count += (m.count || 0);
+      methodMap.set(k, existing);
+    });
+    const paymentMethodBreakdown = Array.from(methodMap.values());
 
     // Top selling products
     const topProducts = await Order.aggregate([

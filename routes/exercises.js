@@ -88,6 +88,14 @@ async function uploadToCloudinary(file, options = {}) {
   });
 }
 
+function safeParseArray(val, fallback = []) {
+  if (Array.isArray(val)) return val;
+  if (typeof val === 'string') {
+    try { return JSON.parse(val); } catch { return fallback; }
+  }
+  return fallback;
+}
+
 // GET /api/exercises?muscleGroup=chest&public=true
 router.get('/', publicCache(60), async (req, res) => {
   try {
@@ -156,13 +164,35 @@ router.get('/my', protect, async (req, res) => {
 });
 
 // GET /api/exercises/:id
-router.get('/:id', publicCache(120), async (req, res) => {
+router.get('/:id', async (req, res) => {
   try {
-    const cacheKey = `exercises:item:${req.params.id}`;
-    const ex = await cache.getOrSet(cacheKey, 120, () =>
-      Exercise.findById(req.params.id).populate('uploadedBy', 'name role').lean()
-    );
+    const ex = await Exercise.findById(req.params.id).populate('uploadedBy', 'name role').lean();
     if (!ex) return res.status(404).json({ message: 'Exercise not found' });
+
+    if (!ex.isPublic) {
+      const authHeader = req.headers.authorization;
+      if (!authHeader) {
+        return res.status(401).json({ message: 'Authentication required to view private exercise.' });
+      }
+      try {
+        const jwt = require('jsonwebtoken');
+        const decoded = jwt.verify(authHeader.split(' ')[1], process.env.JWT_SECRET);
+        const User = require('../models/User');
+        const user = await User.findById(decoded.id).select('role').lean();
+        if (!user) return res.status(401).json({ message: 'User not found.' });
+
+        const isStaff = user.role === 'admin' || user.role === 'trainer';
+        const isAssigned = Array.isArray(ex.assignedTo) && ex.assignedTo.some(id => String(id) === String(user._id));
+        if (!isStaff && !isAssigned) {
+          return res.status(403).json({ message: 'Access denied to private exercise.' });
+        }
+      } catch {
+        return res.status(401).json({ message: 'Invalid or expired authentication token.' });
+      }
+    } else {
+      res.set('Cache-Control', 'public, max-age=120, stale-while-revalidate=240');
+    }
+
     res.json(ex);
   } catch (err) {
     sendDbError(res, err);
@@ -204,7 +234,7 @@ router.post('/', protect, trainerOrAdmin, async (req, res) => {
       video:          videoUrl,
       videoPublicId,
       uploadedBy:     req.user._id,
-      assignedTo:     req.body.assignedTo ? JSON.parse(req.body.assignedTo) : [],
+      assignedTo:     safeParseArray(req.body.assignedTo),
       isPublic:       req.body.isPublic === 'false' ? false : true,
     });
     cache.delPattern('exercises:');
@@ -252,7 +282,7 @@ router.put('/:id', protect, trainerOrAdmin, async (req, res) => {
       image:          imageUrl,
       video:          videoUrl,
       videoPublicId,
-      assignedTo:     req.body.assignedTo ? JSON.parse(req.body.assignedTo) : ex.assignedTo,
+      assignedTo:     req.body.assignedTo !== undefined ? safeParseArray(req.body.assignedTo, ex.assignedTo) : ex.assignedTo,
       isPublic:       req.body.isPublic === 'false' ? false : req.body.isPublic === 'true' ? true : ex.isPublic,
     };
     const updated = await Exercise.findByIdAndUpdate(req.params.id, updates, { new: true });

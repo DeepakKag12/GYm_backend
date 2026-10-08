@@ -40,10 +40,21 @@ router.post('/login', async (req, res) => {
     if (!email || !password) {
       return res.status(400).json({ message: 'Email and password are required' });
     }
-    // The schema lowercases email on write, so a stored address is always
-    // lowercase. Normalising the lookup too means "Ajeet@Gym.in" and a stray
-    // trailing space from a phone keyboard still find the account.
-    const user = await User.findOne({ email: String(email).trim().toLowerCase() });
+    const identifier = String(email || '').trim();
+    const digitsOnly = identifier.replace(/\D/g, '');
+    let user;
+    if (digitsOnly.length === 10) {
+      user = await User.findOne({
+        $or: [
+          { phone: digitsOnly },
+          { phone: `+91${digitsOnly}` },
+          { phone: `91${digitsOnly}` },
+          { email: identifier.toLowerCase() },
+        ],
+      });
+    } else {
+      user = await User.findOne({ email: identifier.toLowerCase() });
+    }
     // 401, not 400: the request was fine, the credentials were refused. The
     // message stays identical either way so it cannot be used to discover
     // which email addresses exist.

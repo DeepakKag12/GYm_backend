@@ -393,7 +393,7 @@ app.use((err, req, res, next) => {
 });
 
 // ── Notification channel report ───────────────────────────────────────────────
-// Print on boot which delivery channels are live, so a missing Twilio/SMTP env
+// Print on boot which delivery channels are live, so a missing Meta/SMTP env
 // var shows up here instead of as a silently undelivered reminder at 09:00.
 {
   const { channelHealth } = require('./services/notify');

@@ -64,7 +64,8 @@ router.delete('/:id', protect, async (req, res) => {
       return res.status(403).json({ message: 'Forbidden' });
     }
     await entry.deleteOne();
-    cache.del(progressKey(req.user._id));
+    cache.del(progressKey(entry.member));
+    if (entry.member.toString() !== req.user._id.toString()) cache.del(progressKey(req.user._id));
     res.json({ message: 'Deleted' });
   } catch (err) { sendDbError(res, err); }
 });

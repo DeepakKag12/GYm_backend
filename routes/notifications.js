@@ -5,6 +5,7 @@ const User = require('../models/User');
 const { protect, adminOnly } = require('../middleware/auth');
 const cache = require('../utils/cache');
 const { notifyMember, notifyMembers, channelHealth, notifKey } = require('../services/notify');
+const { daysRemaining } = require('../utils/dateUtils');
 const { sendDbError } = require('../utils/dbError');
 
 // TTL = 30 s — short so unread badge stays fresh, but avoids hammering DB
@@ -65,7 +66,7 @@ router.get('/admin/channels', protect, adminOnly, (req, res) => {
 });
 
 // POST /api/notifications/admin/test — send a test message to yourself (or a
-// given phone/email) to verify Twilio + SMTP end to end.
+// given phone/email) to verify Meta WhatsApp + SMTP end to end.
 // Body: { phone?, email?, channels? }
 router.post('/admin/test', protect, adminOnly, async (req, res) => {
   try {
@@ -111,24 +112,71 @@ router.post('/admin/send', protect, adminOnly, async (req, res) => {
     if (memberId) {
       const member = await User.findById(memberId);
       if (!member) return res.status(404).json({ message: 'Member not found' });
+      const left = member.membershipEnd
+        ? (daysRemaining(member.membershipEnd, Date.now()) ?? 0)
+        : 0;
       const { notification, results, delivered, failed } =
-        await notifyMember(member, { type, title, message }, { channels: picked });
+        await notifyMember(member, {
+          type,
+          title,
+          message,
+          customerName: member.name,
+          daysRemaining: left,
+          isGymReminder: type === 'fee-reminder' || type === 'membership-expired',
+        }, { channels: picked });
       cache.del(ADMIN_FEED_KEY);
       // `notification` is null when the caller opted out of the 'website' channel.
       return res.json({ ...(notification ? notification.toObject() : {}), delivered, failed, results });
     }
 
-    // Broadcast. The fan-out is throttled so Twilio/SMTP aren't hit with 500 at
-    // once. Rough budget: members / concurrency seconds — Vercel caps the request
-    // at maxDuration (60 s in vercel.json), so raise BROADCAST_CONCURRENCY if your
-    // roster outgrows that. In-app docs are written as the sweep goes, so even a
-    // timed-out request leaves every processed member notified.
-    const members = await User.find({ role: 'member', isActive: { $ne: false } })
-      .select('_id name email phone whatsapp notifyEmail notifyWhatsApp');
-    const summary = await notifyMembers(members, { type, title, message }, {
-      channels: picked,
-      concurrency: Number(process.env.BROADCAST_CONCURRENCY || 8),
-    });
+    // Targeted audience or broadcast
+    const now = new Date();
+    let query = { role: 'member', isActive: { $ne: false } };
+
+    if (req.body.target === 'expiring_2d') {
+      const in2Days = new Date(now.getTime() + 2 * 86400000);
+      query.membershipStatus = 'active';
+      query.membershipEnd = { $gte: now, $lte: in2Days };
+    } else if (req.body.target === 'expiring_7d') {
+      const in7Days = new Date(now.getTime() + 7 * 86400000);
+      query.membershipStatus = 'active';
+      query.membershipEnd = { $gte: now, $lte: in7Days };
+    } else if (req.body.target === 'expired') {
+      query.membershipStatus = 'expired';
+    } else if (Array.isArray(req.body.memberIds) && req.body.memberIds.length) {
+      query._id = { $in: req.body.memberIds };
+    }
+
+    const members = await User.find(query)
+      .select('_id name email phone whatsapp notifyEmail notifyWhatsApp membershipEnd');
+
+    if (!members.length) {
+      return res.json({ message: 'No members match the selected audience filter.', sent: 0, count: 0 });
+    }
+
+    const isGymReminder = type === 'fee-reminder' || type === 'membership-expired';
+
+    const summary = await notifyMembers(
+      members,
+      member => {
+        const left = member.membershipEnd
+          ? (daysRemaining(member.membershipEnd, now) ?? 0)
+          : 0;
+        return {
+          type,
+          title,
+          message,
+          subject: `${title} — FitNation`,
+          customerName: member.name,
+          daysRemaining: left,
+          isGymReminder,
+        };
+      },
+      {
+        channels: picked,
+        concurrency: Number(process.env.BROADCAST_CONCURRENCY || 8),
+      }
+    );
     cache.delPattern('notifs:member:');
     cache.del(ADMIN_FEED_KEY);
 

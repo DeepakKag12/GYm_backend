@@ -20,13 +20,14 @@
  *  - A delivery failure NEVER throws. The in-app notification is the source of
  *    truth; WhatsApp/email are best-effort and their outcome is recorded.
  *  - Channel config is checked once per send, not per member.
- *  - Bulk sends run with bounded concurrency so Twilio/SMTP aren't flooded.
+ *  - Bulk sends run with bounded concurrency so Meta API/SMTP aren't flooded.
  */
 const Notification = require('../models/Notification');
 const cache = require('../utils/cache');
 const { sendWhatsApp, whatsappStatus } = require('../utils/whatsapp');
 const { sendEmail, emailStatus } = require('../utils/email');
 const { renderEmail, BRAND, SITE_URL } = require('../utils/emailTemplate');
+const { daysRemaining: calcDaysRemaining } = require('../utils/dateUtils');
 
 const ALL_CHANNELS = ['website', 'whatsapp', 'email'];
 
@@ -104,7 +105,19 @@ async function notifyMember(member, payload, opts = {}) {
   const tasks = [];
   if (channels.has('whatsapp')) {
     const to = member.whatsapp || member.phone;
-    tasks.push(sendWhatsApp(to, buildWhatsAppBody({ title, message, ctaText, ctaUrl })));
+    const daysLeft = payload.daysRemaining !== undefined ? payload.daysRemaining : (
+      member.membershipEnd
+        ? (calcDaysRemaining(member.membershipEnd, new Date()) ?? 0)
+        : 0
+    );
+    tasks.push(
+      sendWhatsApp(to, buildWhatsAppBody({ title, message, ctaText, ctaUrl }), {
+        customerName: payload.customerName || member.name || 'Athlete',
+        daysRemaining: daysLeft,
+        isGymReminder: payload.isGymReminder || type === 'fee-reminder' || type === 'membership-expired',
+        member,
+      })
+    );
   }
   if (channels.has('email')) {
     tasks.push(
@@ -161,7 +174,7 @@ function toDelivery(r) {
 
 /**
  * Bulk version: same notification (or a per-member one) to many members, run with
- * bounded concurrency so a 500-member sweep doesn't hit Twilio's rate limit.
+ * bounded concurrency so a 500-member sweep doesn't hit Meta API rate limits.
  *
  * @param {Array} members
  * @param {Function|object} payloadOrFn  payload, or (member) => payload | null (null = skip)
@@ -186,7 +199,10 @@ async function notifyMembers(members, payloadOrFn, opts = {}) {
       if (!payload) { summary.skipped++; continue; }
 
       try {
-        const { delivered } = await notifyMember(member, payload, opts);
+        const { delivered } = await notifyMember(member, payload, {
+          ...opts,
+          channels: payload.channels || opts.channels,
+        });
         summary.sent++;
         if (delivered.includes('whatsapp')) summary.whatsapp++;
         if (delivered.includes('email')) summary.email++;
@@ -230,7 +246,13 @@ function channelHealth() {
   const wa = whatsappStatus();
   const em = emailStatus();
   return {
-    whatsapp: { configured: wa.ok, from: wa.from, auth: wa.auth, warning: wa.warning, reason: wa.reason },
+    whatsapp: {
+      configured: wa.ok,
+      from: wa.phoneId || wa.from,
+      provider: wa.provider || 'meta_cloud_api',
+      template: wa.templateName,
+      reason: wa.reason,
+    },
     email: { configured: em.ok, from: em.from, transport: em.transport, via: em.via, reason: em.reason },
     website: { configured: true },
     brand: BRAND,

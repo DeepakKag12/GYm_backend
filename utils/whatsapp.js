@@ -1,136 +1,79 @@
 /**
- * Twilio WhatsApp sender.
+ * Meta WhatsApp Cloud API Service.
  *
- * Improvements over the first version:
- *  - One lazily-created Twilio client reused across calls (the old code called
- *    require('twilio') + twilio(sid, token) on *every* message, which rebuilt the
- *    HTTP agent each time and killed connection reuse on bulk sends).
- *  - Returns a structured result instead of a bare boolean, so callers can record
- *    the message SID / error code on the Notification document.
- *  - Retries transient failures (429 / 5xx / Twilio 20429, 20500, 20503) with
- *    exponential backoff instead of dropping the message.
- *  - Supports a Messaging Service SID and WhatsApp *content templates*, which is
- *    what you need to message a user outside the 24-hour session window.
- *  - Bulk send with bounded concurrency so a 500-member sweep doesn't trip
- *    Twilio's per-second rate limit.
- *
- * NOTE: sendWhatsApp() now resolves to an object, not a boolean. Truthiness is no
- * longer a success check — read `.ok`.
+ * Official Cloud API sender using Meta Graph API (v21.0).
+ * Reliable Meta Cloud API delivery:
+ *  - Supports pre-approved templates (e.g. 'fitnation_by_ajeet' with {{1}} customerName and {{2}} daysRemaining)
+ *  - Supports document attachments (PDF statements)
+ *  - Supports free-form text messages (within 24-hour service window)
+ *  - Handles exponential backoff retries on transient 429/5xx errors
  */
 
+const axios = require('axios');
+
+const META_GRAPH_VERSION = process.env.META_GRAPH_VERSION || 'v21.0';
 const DEFAULT_COUNTRY_CODE = (process.env.DEFAULT_COUNTRY_CODE || '91').replace(/\D/g, '');
-const WHATSAPP_BODY_LIMIT = 1600; // Twilio hard limit for a WhatsApp body
-
-/** Twilio error codes worth retrying — everything else is a permanent failure. */
-const RETRYABLE_TWILIO_CODES = new Set([20429, 20500, 20503, 30001]);
-
-let cachedClient;      // twilio client singleton
-let cachedClientKey;   // sid:token the singleton was built with (so rotated creds rebuild it)
 
 /**
- * Format a phone number to WhatsApp E.164 (`whatsapp:+<country><number>`).
- *  - Already prefixed with 'whatsapp:' → returned untouched
- *  - Starts with '+' → used as-is
- *  - 10-digit Indian mobile (6/7/8/9) → prefixed with the default country code
- *  - Leading 0 (0XXXXXXXXXX) → 0 stripped, country code prepended
- *  - Leading 00 international prefix (0091…) → converted to '+'
+ * Format any phone number into clean E.164 digits without '+' or symbols
+ * as required by Meta Cloud API (e.g., '919589730151').
  */
 function formatWhatsAppNumber(to) {
   if (!to) return null;
-  const raw = String(to).trim();
-  if (raw.startsWith('whatsapp:')) return raw;
+  let raw = String(to).trim();
+  if (raw.startsWith('whatsapp:')) raw = raw.replace(/^whatsapp:/i, '');
 
-  const cleaned = raw.replace(/[\s\-().]/g, '');
-  if (cleaned.startsWith('+')) return `whatsapp:${cleaned}`;
-  if (/^00\d{8,15}$/.test(cleaned)) return `whatsapp:+${cleaned.slice(2)}`;
-  if (/^[6-9]\d{9}$/.test(cleaned)) return `whatsapp:+${DEFAULT_COUNTRY_CODE}${cleaned}`;
-  if (/^0[6-9]\d{9}$/.test(cleaned)) return `whatsapp:+${DEFAULT_COUNTRY_CODE}${cleaned.slice(1)}`;
-  if (/^\d{8,15}$/.test(cleaned)) return `whatsapp:+${cleaned}`;
-  return null; // not a number we can dial — caller reports it as skipped
+  const cleaned = raw.replace(/[\s\-().+]/g, '');
+  if (!cleaned) return null;
+
+  // Leading '00' international prefix (e.g., 00919876543210 -> 919876543210)
+  if (/^00\d{8,15}$/.test(cleaned)) {
+    return cleaned.slice(2);
+  }
+
+  // 10-digit Indian mobile number starting with 6, 7, 8, 9
+  if (/^[6-9]\d{9}$/.test(cleaned)) {
+    return `${DEFAULT_COUNTRY_CODE}${cleaned}`;
+  }
+
+  // 11-digit with leading 0 (e.g., 09876543210 -> 919876543210)
+  if (/^0[6-9]\d{9}$/.test(cleaned)) {
+    return `${DEFAULT_COUNTRY_CODE}${cleaned.slice(1)}`;
+  }
+
+  // Standard international number with country code (8 to 15 digits)
+  if (/^\d{8,15}$/.test(cleaned)) {
+    return cleaned;
+  }
+
+  return null;
 }
 
-/** Placeholder values from .env.example that must not be treated as real config. */
+/** Check if a config string is missing or placeholder. */
 function isPlaceholder(v) {
-  return !v || /^(your_|ACxxxx|xxxx|SKxxxx)/i.test(v);
+  return !v || /^(your_|ACxxxx|xxxx|PASTE_)/i.test(v);
 }
 
 /**
- * Twilio accepts two credential styles and this backend supports both:
- *
- *   TWILIO_AUTH_TOKEN                    — the account's primary auth token
- *   TWILIO_API_KEY + TWILIO_API_SECRET   — a scoped API key, whose SID starts
- *                                          with "SK" (recommended by Twilio,
- *                                          because it can be revoked on its own)
- *
- * Auth token wins when both are present. A TWILIO_API_KEY that is not
- * SK-prefixed is almost always an auth token pasted into the wrong variable —
- * that is the single most common cause of error 20003 — so it is used as one,
- * with a warning, rather than failing silently.
- */
-function resolveTwilioAuth() {
-  const accountSid = process.env.TWILIO_ACCOUNT_SID;
-  const token = process.env.TWILIO_AUTH_TOKEN;
-  const key = process.env.TWILIO_API_KEY;
-  const secret = process.env.TWILIO_API_SECRET;
-
-  if (!isPlaceholder(token)) {
-    return { username: accountSid, password: token, accountSid, style: 'auth token' };
-  }
-  if (!isPlaceholder(key) && !isPlaceholder(secret)) {
-    if (/^SK[0-9a-f]{32}$/i.test(key)) {
-      return { username: key, password: secret, accountSid, style: 'API key' };
-    }
-    if (/^[0-9a-f]{32}$/i.test(key)) {
-      return {
-        username: accountSid,
-        password: key,
-        accountSid,
-        style: 'auth token (from TWILIO_API_KEY)',
-        warning: 'TWILIO_API_KEY is not an API Key SID (those start with "SK") — using it as TWILIO_AUTH_TOKEN. Rename it to TWILIO_AUTH_TOKEN, or create an API key at console.twilio.com → Account → API keys.',
-      };
-    }
-    return { error: 'TWILIO_API_KEY is neither an API Key SID (SK…) nor a 32-character auth token' };
-  }
-  return { error: 'Set TWILIO_AUTH_TOKEN, or TWILIO_API_KEY + TWILIO_API_SECRET' };
-}
-
-let warnedOnce = false;
-
-/**
- * Is WhatsApp usable right now? Returns { ok, reason } so the health endpoint and
- * the send path share one source of truth.
+ * Check Meta WhatsApp credentials status.
  */
 function whatsappStatus() {
-  const sid = process.env.TWILIO_ACCOUNT_SID;
-  const from = process.env.TWILIO_WHATSAPP_FROM;
-  const service = process.env.TWILIO_MESSAGING_SERVICE_SID;
+  const token = process.env.META_WHATSAPP_TOKEN;
+  const phoneId = process.env.META_PHONE_NUMBER_ID;
+  const templateName = process.env.META_WHATSAPP_TEMPLATE_NAME || 'fitnation_by_ajeet';
 
-  if (isPlaceholder(sid)) return { ok: false, reason: 'TWILIO_ACCOUNT_SID missing or placeholder' };
-  if (!/^AC[0-9a-f]{32}$/i.test(sid)) return { ok: false, reason: 'TWILIO_ACCOUNT_SID must be an AC… account SID' };
-
-  const auth = resolveTwilioAuth();
-  if (auth.error) return { ok: false, reason: auth.error };
-
-  // Twilio's Test credentials are a different SID/token pair that accepts calls
-  // and returns plausible-looking responses but never delivers anything. It
-  // looks identical to a working setup until a message fails to arrive, so it
-  // is worth naming explicitly wherever we can detect it.
-  if (process.env.TWILIO_CREDENTIALS_ARE_TEST === 'true') {
-    return { ok: false, reason: 'TWILIO_CREDENTIALS_ARE_TEST is set — test credentials never deliver messages' };
+  if (isPlaceholder(token)) {
+    return { ok: false, reason: 'META_WHATSAPP_TOKEN missing or placeholder in .env' };
+  }
+  if (isPlaceholder(phoneId)) {
+    return { ok: false, reason: 'META_PHONE_NUMBER_ID missing or placeholder in .env' };
   }
 
-  if (isPlaceholder(from) && isPlaceholder(service)) {
-    return { ok: false, reason: 'Set TWILIO_WHATSAPP_FROM (e.g. whatsapp:+14155238886) or TWILIO_MESSAGING_SERVICE_SID' };
-  }
-  if (auth.warning && !warnedOnce) {
-    warnedOnce = true;
-    console.warn(`⚠️  Twilio: ${auth.warning}`);
-  }
   return {
     ok: true,
-    from: from || `messaging-service:${service}`,
-    auth: auth.style,
-    warning: auth.warning,
+    provider: 'meta_cloud_api',
+    phoneId,
+    templateName,
   };
 }
 
@@ -138,76 +81,174 @@ function isWhatsAppConfigured() {
   return whatsappStatus().ok;
 }
 
-function getClient() {
-  const auth = resolveTwilioAuth();
-  const key = `${auth.username}:${auth.password}`;
-  if (!cachedClient || cachedClientKey !== key) {
-    const twilio = require('twilio');
-    cachedClient = twilio(auth.username, auth.password, {
-      // API-key credentials need the account SID passed explicitly, since the
-      // username is the key SID rather than the account.
-      accountSid: auth.accountSid,
-      autoRetry: true,
-      maxRetries: 1,
-    });
-    cachedClientKey = key;
-  }
-  return cachedClient;
-}
-
-/** Verify the credentials without sending anything (used by the test script). */
-async function verifyTwilio() {
-  const status = whatsappStatus();
-  if (!status.ok) return status;
-  try {
-    const acc = await getClient().api.accounts(process.env.TWILIO_ACCOUNT_SID).fetch();
-    return { ok: true, verified: true, account: acc.friendlyName, accountStatus: acc.status, ...status };
-  } catch (err) {
-    return { ok: false, reason: `Twilio rejected the credentials: [${err.code}] ${err.message}`, ...status, verified: false };
-  }
-}
-
-/** Human-readable hint for the Twilio error codes that actually show up in practice. */
-function explain(code) {
+/** Human-readable explanation for common Meta Cloud API error codes. */
+function explainMetaError(code, message) {
   switch (code) {
-    case 21211: return 'Invalid "to" number — store member phones as +91XXXXXXXXXX';
-    case 63007: return 'TWILIO_WHATSAPP_FROM is not a WhatsApp sender on this account. On a trial account use the sandbox number whatsapp:+14155238886 (and have each recipient send "join <keyword>" to it first); a normal Twilio phone number is NOT WhatsApp-enabled until you register it as a WhatsApp sender.';
-    case 63016: return 'Free-form message outside the session window. Sandbox: the recipient must WhatsApp "join <keyword>" to +14155238886 first. Production: send an approved template (TWILIO_WHATSAPP_TEMPLATE_SID).';
-    case 63015: return 'No open 24-hour session with this recipient. WhatsApp only allows free-form text within 24 h of the user\'s last message; outside that you must send an approved template — set TWILIO_WHATSAPP_TEMPLATE_SID. On the sandbox, the recipient must first WhatsApp "join <keyword>" to +14155238886.';
-    case 63018: return 'Rate limited by WhatsApp for this recipient';
-    case 20003: return 'Twilio rejected the credentials — check TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN (an API key must be the SK… SID plus its secret)';
-    case 20008: return 'These are Twilio TEST credentials, which never deliver a real message. Console → Account → API keys & tokens has two pairs: copy the LIVE Account SID and Auth Token into TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN.';
-    case 21608: return 'Trial account: the recipient is not a verified number, or the "from" number is not WhatsApp-enabled';
-    case 21610: return 'Recipient has blocked/unsubscribed from this sender';
-    default: return null;
+    case 131030:
+      return 'Recipient phone number is not whitelisted in Meta Developer Dashboard (Development/Sandbox mode). Add this phone number to Test Numbers or verify your business in Meta Business Suite.';
+    case 131026:
+      return 'Message undeliverable. The recipient number may not have an active WhatsApp account or has blocked the business.';
+    case 132000:
+      return 'Template parameter count mismatch. The template requires different parameters than provided.';
+    case 132001:
+      return 'Template does not exist in the specified language (en). Verify template name in Meta Business Manager.';
+    case 131047:
+      return 'Re-engagement message failed or 24h window closed without an approved template.';
+    case 190:
+      return 'Meta Access Token is invalid or expired. Generate a Permanent System User Token in Meta Business Suite.';
+    case 100:
+      return 'Invalid parameter or Phone Number ID in Meta request.';
+    case 80007:
+      return 'Meta API rate limit exceeded. Please try again shortly.';
+    default:
+      return message || null;
   }
-}
-
-function isRetryable(err) {
-  if (RETRYABLE_TWILIO_CODES.has(err.code)) return true;
-  return err.status === 429 || (err.status >= 500 && err.status < 600);
 }
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 /**
- * Send one WhatsApp message.
+ * Send a gym membership renewal reminder via Meta WhatsApp Cloud API template.
  *
- * @param {string} to      Member phone (any of the formats formatWhatsAppNumber handles)
- * @param {string} message Body text (truncated at Twilio's 1600-char limit)
+ * @param {string} recipientPhone  Destination phone number (e.g. '919589730151')
+ * @param {string} customerName    Member's full name (fills {{1}})
+ * @param {number|string} daysRemaining Days left in membership (fills {{2}})
+ * @param {object} [opts]          Optional overrides
+ * @returns {Promise<{ok:boolean, channel:'whatsapp', messageId?:string, to?:string, error?:string}>}
+ */
+async function sendGymReminder(recipientPhone, customerName, daysRemaining = 5, opts = {}) {
+  const token = process.env.META_WHATSAPP_TOKEN;
+  const phoneId = process.env.META_PHONE_NUMBER_ID;
+  const templateName = opts.templateName || process.env.META_WHATSAPP_TEMPLATE_NAME || 'fitnation_by_ajeet';
+  const langCode = opts.languageCode || process.env.META_WHATSAPP_TEMPLATE_LANG || 'en';
+
+  const status = whatsappStatus();
+  if (!status.ok) {
+    console.warn(`⚠️  WhatsApp skipped — ${status.reason}`);
+    return { ok: false, channel: 'whatsapp', skipped: true, reason: status.reason };
+  }
+
+  const formattedTo = formatWhatsAppNumber(recipientPhone);
+  if (!formattedTo) {
+    return { ok: false, channel: 'whatsapp', skipped: true, reason: `Invalid phone number "${recipientPhone}"` };
+  }
+
+  const url = `https://graph.facebook.com/${META_GRAPH_VERSION}/${phoneId}/messages`;
+
+  const payload = {
+    messaging_product: 'whatsapp',
+    to: formattedTo,
+    type: 'template',
+    template: {
+      name: templateName,
+      language: {
+        code: langCode,
+      },
+      components: [
+        {
+          type: 'body',
+          parameters: [
+            { type: 'text', text: String(customerName || 'Athlete') },
+            { type: 'text', text: String(daysRemaining ?? '0') },
+          ],
+        },
+      ],
+    },
+  };
+
+  try {
+    const res = await axios.post(url, payload, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      timeout: 15000,
+    });
+
+    const msgId = res.data?.messages?.[0]?.id;
+    console.log(`🎉 Reminder sent successfully to ${customerName} (${formattedTo})! Message ID: ${msgId}`);
+    return {
+      ok: true,
+      channel: 'whatsapp',
+      messageId: msgId,
+      to: formattedTo,
+      provider: 'meta_cloud_api',
+    };
+  } catch (err) {
+    const metaErr = err.response?.data?.error;
+    const code = metaErr?.code || err.code;
+    const msg = metaErr?.message || err.message;
+
+    // If template not found in 'en', auto-retry with 'en_US' (Meta default for English templates)
+    if (code === 132001 && payload.template?.language?.code === 'en') {
+      try {
+        const retryPayload = {
+          ...payload,
+          template: { ...payload.template, language: { code: 'en_US' } },
+        };
+        const retryRes = await axios.post(url, retryPayload, {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          timeout: 15000,
+        });
+        const retryMsgId = retryRes.data?.messages?.[0]?.id;
+        console.log(`🎉 Reminder sent successfully with en_US template to ${customerName} (${formattedTo})! Message ID: ${retryMsgId}`);
+        return {
+          ok: true,
+          channel: 'whatsapp',
+          messageId: retryMsgId,
+          to: formattedTo,
+          provider: 'meta_cloud_api',
+        };
+      } catch (retryErr) {
+        // Fall back to original error reporting
+      }
+    }
+
+    const hint = explainMetaError(code, msg);
+
+    console.error(`❌ Meta WhatsApp error for ${formattedTo} [${code}]: ${msg}`);
+    if (hint) console.error(`   ↳ ${hint}`);
+
+    return {
+      ok: false,
+      channel: 'whatsapp',
+      to: formattedTo,
+      code,
+      error: msg,
+      hint,
+      provider: 'meta_cloud_api',
+    };
+  }
+}
+
+/**
+ * Universal WhatsApp message dispatcher.
+ * Handles templates (fitnation_by_ajeet), media attachments (PDF invoices), and fallback text.
+ *
+ * @param {string} to              Recipient phone number
+ * @param {string} message         Notification text
  * @param {object} [opts]
- * @param {string} [opts.contentSid]        Approved template SID (for out-of-session sends)
- * @param {object} [opts.contentVariables]  Template variables, e.g. { 1: 'Ajeet' }
- * @param {string} [opts.mediaUrl]          Public image/PDF URL to attach
- * @param {number} [opts.retries=2]         Extra attempts on transient errors
- * @returns {Promise<{ok:boolean, channel:'whatsapp', skipped?:boolean, reason?:string,
- *                     sid?:string, to?:string, code?:number, error?:string}>}
+ * @param {string} [opts.customerName] Member name for template {{1}}
+ * @param {number|string} [opts.daysRemaining] Days left for template {{2}}
+ * @param {string} [opts.mediaUrl]     Public PDF or image attachment URL
+ * @param {string} [opts.filename]     Optional filename for document
+ * @param {boolean} [opts.forceText]   Send freeform text instead of template
+ * @param {number} [opts.retries=1]    Retry attempts on transient 429/5xx errors
  */
 async function sendWhatsApp(to, message, opts = {}) {
-  const { contentSid, contentVariables, mediaUrl, retries = 2 } = opts;
+  const {
+    customerName,
+    daysRemaining,
+    mediaUrl,
+    filename,
+    forceText = false,
+    retries = 1,
+  } = opts;
 
   if (!to) return { ok: false, channel: 'whatsapp', skipped: true, reason: 'no phone number on record' };
-  if (!message && !contentSid) return { ok: false, channel: 'whatsapp', skipped: true, reason: 'empty message' };
 
   const status = whatsappStatus();
   if (!status.ok) {
@@ -220,34 +261,84 @@ async function sendWhatsApp(to, message, opts = {}) {
     return { ok: false, channel: 'whatsapp', skipped: true, reason: `unparseable phone number "${to}"` };
   }
 
-  const payload = { to: formattedTo };
-  if (process.env.TWILIO_MESSAGING_SERVICE_SID) {
-    payload.messagingServiceSid = process.env.TWILIO_MESSAGING_SERVICE_SID;
-  } else {
-    payload.from = process.env.TWILIO_WHATSAPP_FROM;
+  const token = process.env.META_WHATSAPP_TOKEN;
+  const phoneId = process.env.META_PHONE_NUMBER_ID;
+  const url = `https://graph.facebook.com/${META_GRAPH_VERSION}/${phoneId}/messages`;
+
+  // 1. If media attachment (e.g., PDF statement from payments route)
+  if (mediaUrl) {
+    const isPdf = /\.pdf(\?|$)/i.test(mediaUrl) || /statement/i.test(mediaUrl);
+    const payload = {
+      messaging_product: 'whatsapp',
+      to: formattedTo,
+      type: isPdf ? 'document' : 'image',
+      [isPdf ? 'document' : 'image']: {
+        link: mediaUrl,
+        caption: message ? message.slice(0, 1024) : undefined,
+        ...(isPdf ? { filename: filename || 'Payment-Statement.pdf' } : {}),
+      },
+    };
+
+    try {
+      const res = await axios.post(url, payload, {
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        timeout: 15000,
+      });
+      const msgId = res.data?.messages?.[0]?.id;
+      console.log(`✅ WhatsApp media sent to ${formattedTo} (${msgId})`);
+      return { ok: true, channel: 'whatsapp', messageId: msgId, to: formattedTo };
+    } catch (err) {
+      console.error(`❌ WhatsApp media failed for ${formattedTo}:`, err.response?.data?.error || err.message);
+      // If media failed, continue to fallback below
+    }
   }
-  if (contentSid) {
-    payload.contentSid = contentSid;
-    if (contentVariables) payload.contentVariables = JSON.stringify(contentVariables);
-  } else {
-    payload.body = message.length > WHATSAPP_BODY_LIMIT
-      ? `${message.slice(0, WHATSAPP_BODY_LIMIT - 1)}…`
-      : message;
+
+  // 2. If this is explicitly a gym fee/expiration reminder (or template explicitly requested)
+  const isGymReminder = Boolean(
+    opts.isGymReminder ||
+    opts.useTemplate ||
+    opts.templateName ||
+    (opts.daysRemaining !== undefined && !forceText)
+  );
+
+  const templateName = opts.templateName || process.env.META_WHATSAPP_TEMPLATE_NAME || 'fitnation_by_ajeet';
+  if (!forceText && isGymReminder && templateName) {
+    const name = customerName || (opts.member?.name) || 'Athlete';
+    const days = daysRemaining !== undefined ? daysRemaining : 5;
+    const reminderResult = await sendGymReminder(formattedTo, name, days, opts);
+    if (reminderResult.ok) return reminderResult;
+
+    // If template failed due to pending review or 24h issue, try freeform text fallback
+    console.warn(`⚠️  Template send failed, attempting freeform text fallback for ${formattedTo}...`);
   }
-  if (mediaUrl) payload.mediaUrl = [mediaUrl];
-  if (process.env.TWILIO_STATUS_CALLBACK) payload.statusCallback = process.env.TWILIO_STATUS_CALLBACK;
+
+  // 3. Freeform text message
+  const textPayload = {
+    messaging_product: 'whatsapp',
+    to: formattedTo,
+    type: 'text',
+    text: {
+      preview_url: false,
+      body: message ? message.slice(0, 4096) : 'Notification from FitNation',
+    },
+  };
 
   let lastErr;
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
-      const msg = await getClient().messages.create(payload);
-      console.log(`✅ WhatsApp sent to ${formattedTo} (${msg.sid})`);
-      return { ok: true, channel: 'whatsapp', sid: msg.sid, to: formattedTo };
+      const res = await axios.post(url, textPayload, {
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        timeout: 15000,
+      });
+      const msgId = res.data?.messages?.[0]?.id;
+      console.log(`✅ WhatsApp text sent to ${formattedTo} (${msgId})`);
+      return { ok: true, channel: 'whatsapp', messageId: msgId, to: formattedTo };
     } catch (err) {
       lastErr = err;
-      if (attempt < retries && isRetryable(err)) {
-        const wait = 400 * 2 ** attempt; // 400ms, 800ms
-        console.warn(`↻ WhatsApp retry ${attempt + 1}/${retries} for ${formattedTo} in ${wait}ms — [${err.code}] ${err.message}`);
+      const status = err.response?.status;
+      if (attempt < retries && (status === 429 || status >= 500)) {
+        const wait = 500 * (attempt + 1);
+        console.warn(`↻ Meta WhatsApp retry ${attempt + 1}/${retries} in ${wait}ms...`);
         await sleep(wait);
         continue;
       }
@@ -255,44 +346,29 @@ async function sendWhatsApp(to, message, opts = {}) {
     }
   }
 
-  // WhatsApp refuses free-form text outside the 24-hour customer-service window
-  // (63015 / 63016). The only way through is an approved template, so if one is
-  // configured, retry the same notification as that template. The template must
-  // take the whole message as its single {{1}} variable.
-  const templateSid = process.env.TWILIO_WHATSAPP_TEMPLATE_SID;
-  if (!contentSid && templateSid && (lastErr.code === 63015 || lastErr.code === 63016)) {
-    try {
-      const { body: _dropped, ...routing } = payload;   // a template replaces the body
-      const msg = await getClient().messages.create({
-        ...routing,
-        contentSid: templateSid,
-        contentVariables: JSON.stringify({ 1: message }),
-      });
-      console.log(`✅ WhatsApp sent to ${formattedTo} as template ${templateSid} (${msg.sid})`);
-      return { ok: true, channel: 'whatsapp', sid: msg.sid, to: formattedTo, viaTemplate: true };
-    } catch (err) {
-      console.error(`❌ WhatsApp template fallback also failed for ${formattedTo}: [${err.code}] ${err.message}`);
-      lastErr = err;
-    }
-  }
+  const metaErr = lastErr?.response?.data?.error;
+  const code = metaErr?.code || lastErr?.code;
+  const msg = metaErr?.message || lastErr?.message;
+  const hint = explainMetaError(code, msg);
 
-  const hint = explain(lastErr.code);
-  console.error(`❌ WhatsApp failed for ${formattedTo}: [${lastErr.code}] ${lastErr.message}`);
+  console.error(`❌ Meta WhatsApp failed for ${formattedTo}: [${code}] ${msg}`);
   if (hint) console.error(`   ↳ ${hint}`);
+
   return {
     ok: false,
     channel: 'whatsapp',
     to: formattedTo,
-    code: lastErr.code,
-    error: lastErr.message,
+    code,
+    error: msg,
     hint,
   };
 }
 
 /**
- * Fan a message out to many recipients with bounded concurrency.
- * @param {Array<{to:string, message:string, meta?:any}>} jobs
- * @param {number} concurrency
+ * Bulk send helper with concurrency control.
+ *
+ * @param {Array<{to:string, message:string, opts?:any, meta?:any}>} jobs
+ * @param {number} [concurrency=5]
  */
 async function sendBulkWhatsApp(jobs, concurrency = 5) {
   const results = new Array(jobs.length);
@@ -308,11 +384,51 @@ async function sendBulkWhatsApp(jobs, concurrency = 5) {
   return results;
 }
 
+/**
+ * Verify Meta Cloud API connection without sending messages.
+ */
+async function verifyMetaWhatsApp() {
+  const status = whatsappStatus();
+  if (!status.ok) return { ...status, verified: false };
+
+  const token = process.env.META_WHATSAPP_TOKEN;
+  const phoneId = process.env.META_PHONE_NUMBER_ID;
+
+  try {
+    const res = await axios.get(`https://graph.facebook.com/${META_GRAPH_VERSION}/${phoneId}`, {
+      headers: { Authorization: `Bearer ${token}` },
+      timeout: 10000,
+    });
+    const data = res.data;
+    return {
+      ok: true,
+      verified: true,
+      verifiedName: data.verified_name,
+      displayPhoneNumber: data.display_phone_number,
+      qualityRating: data.quality_rating,
+      codeVerificationStatus: data.code_verification_status,
+      phoneId: data.id,
+      platformType: data.platform_type,
+      ...status,
+    };
+  } catch (err) {
+    const metaErr = err.response?.data?.error;
+    const msg = metaErr?.message || err.message;
+    return {
+      ok: false,
+      verified: false,
+      reason: `Meta Cloud API rejected credentials: ${msg}`,
+      ...status,
+    };
+  }
+}
+
 module.exports = {
   sendWhatsApp,
+  sendGymReminder,
   sendBulkWhatsApp,
   formatWhatsAppNumber,
   isWhatsAppConfigured,
   whatsappStatus,
-  verifyTwilio,
+  verifyMetaWhatsApp,
 };

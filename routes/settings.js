@@ -26,6 +26,7 @@ function present(doc) {
     email: doc.email,
     instagram: doc.instagram,
     address: doc.address,
+    upiId: doc.upiId || '',
     hours: doc.hours || [],
     updatedAt: doc.updatedAt,
   };
@@ -49,7 +50,7 @@ router.put('/', protect, adminOnly, async (req, res) => {
     // or anything else the schema happens to gain later.
     const ALLOWED = [
       'gymName', 'ownerName', 'tagline',
-      'phone', 'whatsapp', 'email', 'instagram', 'address',
+      'phone', 'whatsapp', 'email', 'instagram', 'address', 'upiId',
     ];
 
     const doc = await SiteSettings.getSettings();

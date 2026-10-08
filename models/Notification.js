@@ -2,7 +2,7 @@ const mongoose = require('mongoose');
 
 /**
  * Per-channel delivery record. `status`:
- *   sent    — the provider accepted the message (ref = Twilio SID / SMTP message id)
+ *   sent    — the provider accepted the message (ref = Meta message ID / SMTP message id)
  *   failed  — the provider rejected it (error holds the reason)
  *   skipped — not attempted: channel unconfigured, no number/address, or opted out
  */

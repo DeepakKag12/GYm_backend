@@ -25,6 +25,7 @@ const siteSettingsSchema = new mongoose.Schema({
   email:     { type: String, default: '', trim: true },
   instagram: { type: String, default: 'fitnation.by.ajeet', trim: true },
   address:   { type: String, default: '', trim: true },
+  upiId:     { type: String, default: '', trim: true },
 
   // Free text, one line per row, so a gym can write its own hours rather than
   // being forced into a weekday/weekend model that may not fit.

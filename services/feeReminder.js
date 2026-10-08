@@ -13,14 +13,9 @@ const User = require('../models/User');
 const { notifyMembers, adminWhatsAppNumber } = require('./notify');
 const { BRAND, SITE_URL } = require('../utils/emailTemplate');
 
-const DAY_MS = 24 * 60 * 60 * 1000;
-
-/**
- * The gym's local timezone. Everything a member sees — "expires in 2 days",
- * "today" — has to be reckoned here, not in UTC, or an evening reminder in
- * India lands on the wrong calendar day.
- */
-const REMINDER_TZ = process.env.REMINDER_TZ || 'Asia/Kolkata';
+const {
+  REMINDER_TZ, DAY_MS, localDate, daysRemaining,
+} = require('../utils/dateUtils');
 
 /**
  * How many days before expiry the twice-daily chase begins. Members at or below
@@ -40,13 +35,6 @@ const REMINDER_WINDOW_DAYS = Number(process.env.REMINDER_WINDOW_DAYS || 4);
  */
 const REMINDER_GRACE_DAYS = Number(process.env.REMINDER_GRACE_DAYS || 3);
 
-/** Local calendar date as YYYY-MM-DD. */
-function localDate(d = new Date()) {
-  return new Intl.DateTimeFormat('en-CA', {
-    timeZone: REMINDER_TZ, year: 'numeric', month: '2-digit', day: '2-digit',
-  }).format(d);
-}
-
 /**
  * Identifier for one reminder send, e.g. "2026-09-03-am".
  *
@@ -58,17 +46,7 @@ function slotKey(slot, at = new Date()) {
   return `${localDate(at)}-${slot === 'pm' ? 'pm' : 'am'}`;
 }
 
-/** Whole days from now until the membership ends, in the gym's timezone. */
-function daysRemaining(membershipEnd, now) {
-  const end = new Date(membershipEnd);
-  if (Number.isNaN(end.getTime())) return null;
-  // Compare date-to-date so "expires today" is 0 rather than a rounded fraction.
-  const a = new Date(`${localDate(end)}T00:00:00Z`).getTime();
-  const b = new Date(`${localDate(now)}T00:00:00Z`).getTime();
-  return Math.round((a - b) / DAY_MS);
-}
-
-/** Concurrency for the sweep — keeps Twilio well under its per-second limit. */
+/** Concurrency for the sweep — bounded so Meta API and SMTP aren't flooded. */
 const SWEEP_CONCURRENCY = Number(process.env.REMINDER_CONCURRENCY || 5);
 
 function contactNumber() {
@@ -82,6 +60,16 @@ function renewUrl() {
 /**
  * Decide which reminder (if any) a member is due, based on days remaining and
  * which reminders have already been sent. Returns null when nothing is due.
+ *
+ * WhatsApp milestone schedule:
+ *   - 2 days before expiry (daysLeft === 2)  -> 1 message (flag: reminderSentWA2days)
+ *   - On expiry day (daysLeft === 0)         -> 1 message (flag: reminderSentWAExpiry)
+ *   - 1 day after expiry (daysLeft === -1)   -> 1 message (flag: reminderSentWA1dayAfter)
+ *   - Sent once per milestone; no automated WhatsApp messages on other days.
+ *
+ * Email schedule:
+ *   - 7 days before expiry (daysLeft > 3 && daysLeft <= 7 && !member.reminderSent7days)
+ *   - Final stretch (daysLeft <= REMINDER_WINDOW_DAYS && daysLeft >= -REMINDER_GRACE_DAYS && member.lastReminderSlot !== key)
  */
 function planReminder(member, now, slot = 'am') {
   const daysLeft = daysRemaining(member.membershipEnd, now);
@@ -89,62 +77,65 @@ function planReminder(member, now, slot = 'am') {
   const on = () => new Date(member.membershipEnd).toLocaleDateString('en-IN');
   const key = slotKey(slot, now);
 
-  // The final stretch repeats twice a day, from REMINDER_WINDOW_DAYS before
-  // expiry until REMINDER_GRACE_DAYS after it. Renewing pushes membershipEnd
-  // forward and drops the member out of the window, so paying stops the
-  // messages; so does running past the grace period, after which chasing is a
-  // manual decision.
-  if (daysLeft <= REMINDER_WINDOW_DAYS && daysLeft >= -REMINDER_GRACE_DAYS) {
-    if (member.lastReminderSlot === key) return null;   // already sent this slot
+  // 1. Email check (preserved current logic)
+  const email7DaysDue = daysLeft > 3 && daysLeft <= 7 && !member.reminderSent7days;
+  const inFinalStretch = daysLeft <= REMINDER_WINDOW_DAYS && daysLeft >= -REMINDER_GRACE_DAYS;
+  const emailSlotDue = inFinalStretch && member.lastReminderSlot !== key;
+  const isEmailDue = email7DaysDue || emailSlotDue;
 
-    const overdue = daysLeft < 0;
-    const when = overdue
-      ? `expired ${Math.abs(daysLeft)} day${Math.abs(daysLeft) > 1 ? 's' : ''} ago on ${on()}`
-      : daysLeft === 0
-        ? 'expires today'
-        : `expires in ${daysLeft} day${daysLeft > 1 ? 's' : ''} on ${on()}`;
-
-    return {
-      slotKey: key,
-      // Flip the stored status the first time we see it lapsed, but keep
-      // reminding either way.
-      expire: overdue && member.membershipStatus !== 'expired',
-      type: overdue ? 'membership-expired' : 'fee-reminder',
-      title: overdue
-        ? 'Your membership has expired'
-        : daysLeft === 0 ? 'Your membership ends today' : 'Your membership ends soon',
-      message: `Dear ${member.name}, your ${BRAND} membership ${when}. Please renew to keep training. Contact us: ${contactNumber()}`,
-      ctaText: 'Renew now',
-      ctaUrl: renewUrl(),
-    };
+  // 2. WhatsApp check (strict 3 milestones: 2 days before, on expiry day, 1 day after)
+  let isWADue = false;
+  let waFlag = null;
+  if (daysLeft === 2 && !member.reminderSentWA2days) {
+    isWADue = true;
+    waFlag = 'reminderSentWA2days';
+  } else if (daysLeft === 0 && !member.reminderSentWAExpiry) {
+    isWADue = true;
+    waFlag = 'reminderSentWAExpiry';
+  } else if (daysLeft === -1 && !member.reminderSentWA1dayAfter) {
+    isWADue = true;
+    waFlag = 'reminderSentWA1dayAfter';
   }
 
-  if (daysLeft > 3 && daysLeft <= 7 && !member.reminderSent7days) {
-    return {
-      flag: 'reminderSent7days',
-      type: 'fee-reminder',
-      title: 'Membership renewal reminder',
-      message: `Dear ${member.name}, your ${BRAND} membership expires in ${daysLeft} days on ${on()}. Plan your renewal today!`,
-      ctaText: 'View plans',
-      ctaUrl: renewUrl(),
-    };
-  }
-  return null;
+  // If neither channel is due this pass, skip
+  if (!isEmailDue && !isWADue) return null;
+
+  const channels = ['website'];
+  if (isEmailDue) channels.push('email');
+  if (isWADue) channels.push('whatsapp');
+
+  const overdue = daysLeft < 0;
+  const when = overdue
+    ? `expired ${Math.abs(daysLeft)} day${Math.abs(daysLeft) > 1 ? 's' : ''} ago on ${on()}`
+    : daysLeft === 0
+      ? 'expires today'
+      : `expires in ${daysLeft} day${daysLeft > 1 ? 's' : ''} on ${on()}`;
+
+  const title = overdue
+    ? 'Your membership has expired'
+    : daysLeft === 0 ? 'Your membership ends today' : 'Your membership ends soon';
+
+  return {
+    channels,
+    daysLeft,
+    slotKey: emailSlotDue ? key : null,
+    flag: email7DaysDue ? 'reminderSent7days' : null,
+    waFlag: isWADue ? waFlag : null,
+    expire: overdue && member.membershipStatus !== 'expired',
+    type: overdue ? 'membership-expired' : 'fee-reminder',
+    title,
+    message: `Dear ${member.name}, your ${BRAND} membership ${when}. Please renew to keep training. Contact us: ${contactNumber()}`,
+    ctaText: 'Renew now',
+    ctaUrl: renewUrl(),
+  };
 }
 
 /**
  * Run the sweep. Resolves to { notified, failed, whatsapp, email, skipped }.
  * Never throws for a single member — one bad phone number must not abort the run.
- *
- * The per-member reminder flag is only set once the notification has been
- * dispatched, and the flag write is what makes the sweep idempotent: re-running
- * it the same day re-notifies nobody.
  */
 async function runFeeReminderSweep({ slot = 'am' } = {}) {
   const now = new Date();
-  // 'expired' is included on purpose: those are exactly the people who still
-  // owe a renewal. Filtering to 'active' meant the first sweep marked someone
-  // expired and the next sweep could no longer see them.
   const members = await User.find({
     role: 'member',
     isActive: { $ne: false },          // a disabled account is not chased
@@ -168,23 +159,24 @@ async function runFeeReminderSweep({ slot = 'am' } = {}) {
         subject: `${plan.title} — ${BRAND}`,
         ctaText: plan.ctaText,
         ctaUrl: plan.ctaUrl,
+        channels: plan.channels,
+        customerName: member.name,
+        daysRemaining: plan.daysLeft,
+        isGymReminder: true,
       };
     },
     { concurrency: SWEEP_CONCURRENCY }
   );
 
-  // Mark flags for members we notified. The expired status is handled
-  // separately below, because it must be applied to lapsed members whether or
-  // not they were due a message this slot.
+  // Mark flags for members we notified
   let flagFailures = 0;
   for (const member of members) {
     const plan = plans.get(String(member._id));
     if (!plan) continue;
     try {
-      // Written only after the notification was dispatched, so a crash mid-send
-      // means the member is retried rather than silently skipped.
       if (plan.slotKey) member.lastReminderSlot = plan.slotKey;
       if (plan.flag) member[plan.flag] = true;
+      if (plan.waFlag) member[plan.waFlag] = true;
       if (plan.expire) member.membershipStatus = 'expired';
       await member.save();
     } catch (err) {

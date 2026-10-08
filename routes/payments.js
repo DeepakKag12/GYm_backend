@@ -9,7 +9,8 @@ const { protect, adminOnly } = require('../middleware/auth');
 const cache = require('../utils/cache');
 const { sendDbError } = require('../utils/dbError');
 const { sendWhatsApp } = require('../utils/whatsapp');
-const { buildMemberStatement, statementData } = require('../utils/memberStatement');
+const SiteSettings = require('../models/SiteSettings');
+const { buildMemberStatement, buildPaymentReceipt, statementData } = require('../utils/memberStatement');
 
 function uploadStatement(buffer, publicId) {
   return new Promise((resolve, reject) => {
@@ -33,7 +34,8 @@ async function createStatement(memberId) {
     .select('amount method kind createdAt periodStart periodEnd')
     .sort({ createdAt: 1 })
     .lean();
-  const pdf = await buildMemberStatement(member, payments);
+  const settings = await SiteSettings.getSettings().catch(() => null);
+  const pdf = await buildMemberStatement(member, payments, settings);
   const upload = await uploadStatement(pdf, `member-statements/${member._id}-${Date.now()}`);
   return { member, payments, summary: statementData(member, payments), url: upload.secure_url };
 }
@@ -145,20 +147,48 @@ router.get('/:memberId/statement', protect, adminOnly, async (req, res) => {
     const member = await User.findOne({ _id: req.params.memberId, role: 'member' }).select('-password').lean();
     if (!member) return res.status(404).json({ message: 'Member not found.' });
     const payments = await Payment.find({ member: member._id, source: 'membership' })
-      .select('amount method kind createdAt periodStart periodEnd')
+      .select('amount method kind createdAt periodStart periodEnd note')
       .sort({ createdAt: 1 })
       .lean();
-    const pdf = await buildMemberStatement(member, payments);
+    const settings = await SiteSettings.getSettings().catch(() => null);
+    const pdf = await buildMemberStatement(member, payments, settings);
     const filename = `${(member.name || 'member').replace(/[^a-z0-9]/gi, '-')}-statement.pdf`;
+    const isDownload = req.query.download === '1' || req.query.download === 'true';
     res.set({
       'Content-Type': 'application/pdf',
-      'Content-Disposition': `inline; filename="${filename}"`,
+      'Content-Disposition': `${isDownload ? 'attachment' : 'inline'}; filename="${filename}"`,
+      'Access-Control-Expose-Headers': 'Content-Disposition',
       'Content-Length': pdf.length,
       'Cache-Control': 'no-store',
     });
     res.end(pdf);
   } catch (err) { sendDbError(res, err, 'Could not generate the member statement.'); }
 });
+
+// GET /api/payments/:paymentId/receipt — stream official payment transaction receipt PDF
+const handlePaymentReceipt = async (req, res) => {
+  try {
+    const payment = await Payment.findById(req.params.paymentId)
+      .populate('member', 'name email phone membershipPlan membershipStart membershipEnd feeAmount feeDueAmount feePaid')
+      .lean();
+    if (!payment) return res.status(404).json({ message: 'Payment not found.' });
+    const settings = await SiteSettings.getSettings().catch(() => null);
+    const pdf = await buildPaymentReceipt(payment, payment.member, settings);
+    const filename = `receipt-${(payment.member?.name || 'member').replace(/[^a-z0-9]/gi, '-')}-${payment._id.toString().slice(-6)}.pdf`;
+    const isDownload = req.query.download === '1' || req.query.download === 'true';
+    res.set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': `${isDownload ? 'attachment' : 'inline'}; filename="${filename}"`,
+      'Access-Control-Expose-Headers': 'Content-Disposition',
+      'Content-Length': pdf.length,
+      'Cache-Control': 'no-store',
+    });
+    res.end(pdf);
+  } catch (err) { sendDbError(res, err, 'Could not generate payment receipt.'); }
+};
+
+router.get('/:paymentId/receipt', protect, adminOnly, handlePaymentReceipt);
+router.get('/receipt/:paymentId', protect, adminOnly, handlePaymentReceipt);
 
 // POST /api/payments/:memberId/statement — prepare a PDF and upload to Cloudinary for sharing
 router.post('/:memberId/statement', protect, adminOnly, async (req, res) => {
@@ -274,17 +304,24 @@ router.post('/', protect, adminOnly, async (req, res) => {
       amount: payNum,
       method: method || 'cash',
       note,
+      periodStart: memberDoc.membershipStart,
+      periodEnd: memberDoc.membershipEnd,
       recordedBy: req.user._id,
     });
 
     // The current fee model tracks one outstanding amount per member. A desk
     // payment settles that amount so the member leaves the due list if completely settled.
     const remaining = Math.max(0, currentDue - payNum);
-    await User.updateOne({ _id: memberDoc._id }, { $set: { feeDueAmount: remaining, feePaid: remaining === 0 } });
+    const updateFields = { feeDueAmount: remaining, feePaid: remaining === 0 };
+    if (!memberDoc.feeAmount || Number(memberDoc.feeAmount) < payNum) {
+      updateFields.feeAmount = payNum;
+    }
+    await User.updateOne({ _id: memberDoc._id }, { $set: updateFields });
 
     cache.del('payments:summary');
     cache.delPattern('analytics:');
     cache.del('members:all');
+    cache.del('users:admin:all');
     res.status(201).json({
       message: remaining > 0
         ? `Payment of ₹${payNum.toLocaleString('en-IN')} recorded. Remaining due: ₹${remaining.toLocaleString('en-IN')}.`
@@ -339,6 +376,7 @@ router.post('/due', protect, adminOnly, async (req, res) => {
 
     cache.del('payments:summary');
     cache.del('members:all');
+    cache.del('users:admin:all');
     cache.delPattern('analytics:');
 
     res.status(201).json({
@@ -378,6 +416,7 @@ const handleUpdateDue = async (req, res) => {
 
     cache.del('payments:summary');
     cache.del('members:all');
+    cache.del('users:admin:all');
     cache.delPattern('analytics:');
 
     res.json({
@@ -437,6 +476,7 @@ router.post('/due/settle', protect, adminOnly, async (req, res) => {
     }
     cache.del('payments:summary');
     cache.del('members:all');
+    cache.del('users:admin:all');
     cache.delPattern('analytics:');
     res.json({
       message: `${settledCount} due fee${settledCount === 1 ? '' : 's'} marked paid.`,

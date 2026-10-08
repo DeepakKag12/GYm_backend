@@ -7,9 +7,14 @@ const { sendDbError } = require('../utils/dbError');
 
 const PLANS_CACHE_KEY = 'membership:plans:active';
 
-// GET /api/plans  - public: list all active plans
+// GET /api/plans  - public: list active plans; ?all=1 lists all plans (for admin management)
 router.get('/', async (req, res) => {
   try {
+    const showAll = req.query.all === '1' || req.query.all === 'true';
+    if (showAll) {
+      const plans = await MembershipPlan.find().sort({ price: 1 }).lean();
+      return res.json(plans);
+    }
     const plans = await cache.getOrSet(PLANS_CACHE_KEY, 300, () =>
       MembershipPlan.find({ isActive: true }).sort({ price: 1 }).lean()
     );

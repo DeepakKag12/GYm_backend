@@ -5,12 +5,12 @@
  *   node scripts/testNotification.js +919876543210 you@example.com
  *   npm run test:notify -- +919876543210 you@example.com
  *
- * Use this after setting the Twilio / SMTP env vars: it prints exactly which
+ * Use this after setting the Meta WhatsApp / SMTP env vars: it prints exactly which
  * channel worked, and for a failure the provider's error code and the fix.
  */
 require('dotenv').config();
 const { channelHealth, notifyMember } = require('../services/notify');
-const { verifyTwilio } = require('../utils/whatsapp');
+const { verifyMetaWhatsApp } = require('../utils/whatsapp');
 const { verifyTransport } = require('../utils/email');
 
 (async () => {
@@ -24,10 +24,10 @@ const { verifyTransport } = require('../utils/email');
     if (c.warning) console.log(`             ⚠️  ${c.warning}`);
   }
 
-  // Credential check — logs in to Twilio and to the SMTP server, but sends nothing.
+  // Credential check — verifies Meta Cloud API and SMTP server, but sends nothing.
   console.log('\n── Credential check (no messages sent) ──');
-  const [wa, em] = await Promise.all([verifyTwilio(), verifyTransport()]);
-  console.log(`  whatsapp  ${wa.ok ? `✅ authenticated as "${wa.account}" (${wa.accountStatus}, via ${wa.auth})` : `❌ ${wa.reason}`}`);
+  const [wa, em] = await Promise.all([verifyMetaWhatsApp(), verifyTransport()]);
+  console.log(`  whatsapp  ${wa.ok ? `✅ Meta Cloud API verified as "${wa.verifiedName || 'Fitnation'}" (${wa.displayPhoneNumber || wa.phoneId}, status: ${wa.codeVerificationStatus || 'VERIFIED'})` : `❌ ${wa.reason}`}`);
   console.log(`  email     ${em.ok ? `✅ SMTP login accepted (${em.transport})` : `❌ ${em.reason}`}`);
 
   if (!phone && !email) {

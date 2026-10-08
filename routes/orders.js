@@ -3,9 +3,11 @@ const mongoose = require('mongoose');
 const router = express.Router();
 const Order = require('../models/Order');
 const Product = require('../models/Product');
+const SiteSettings = require('../models/SiteSettings');
 const { protect, adminOnly } = require('../middleware/auth');
 const cache = require('../utils/cache');
 const { sendDbError } = require('../utils/dbError');
+const { buildOrderInvoice } = require('../utils/memberStatement');
 
 // POST /api/orders - Place order
 // Prices and the total are recomputed from the database. Previously the whole
@@ -209,6 +211,32 @@ router.put('/:id/status', protect, adminOnly, async (req, res) => {
     res.json(order);
   } catch (err) {
     sendDbError(res, err);
+  }
+});
+
+// GET /api/orders/:id/invoice - stream order invoice PDF (view / download)
+router.get('/:id/invoice', protect, async (req, res) => {
+  try {
+    const order = await Order.findById(req.params.id).populate('user', 'name email phone').lean();
+    if (!order) return res.status(404).json({ message: 'Order not found' });
+    // Members can only view their own invoice; admins can view any
+    if (req.user.role !== 'admin' && String(order.user?._id || order.user) !== String(req.user._id)) {
+      return res.status(403).json({ message: 'Access denied: You cannot view this invoice' });
+    }
+    const settings = await SiteSettings.getSettings().catch(() => null);
+    const pdf = await buildOrderInvoice(order, order.user, settings);
+    const filename = `order-invoice-${order._id.toString().slice(-6)}.pdf`;
+    const isDownload = req.query.download === '1' || req.query.download === 'true';
+    res.set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': `${isDownload ? 'attachment' : 'inline'}; filename="${filename}"`,
+      'Access-Control-Expose-Headers': 'Content-Disposition',
+      'Content-Length': pdf.length,
+      'Cache-Control': 'no-store',
+    });
+    res.end(pdf);
+  } catch (err) {
+    sendDbError(res, err, 'Could not generate order invoice.');
   }
 });
 

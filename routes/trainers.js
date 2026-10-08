@@ -54,6 +54,8 @@ router.post('/', protect, adminOnly, async (req, res) => {
       isActive: isActive !== undefined ? isActive : true,
     });
     cache.del(TRAINERS_CACHE_KEY);
+    cache.del(MEMBERS_CACHE_KEY_MIRROR);
+    cache.del('users:admin:all');
     const safe = trainer.toObject(); delete safe.password;
     res.status(201).json(safe);
   } catch (err) { sendDbError(res, err); }
@@ -76,10 +78,13 @@ router.put('/:id', protect, adminOnly, async (req, res) => {
       }
     }
 
-    const update = { name, email, phone };
+    const update = {};
+    if (name           !== undefined) update.name           = name;
+    if (email          !== undefined) update.email          = email;
+    if (phone          !== undefined) update.phone          = phone;
     if (specialization !== undefined) update.specialization = specialization;
-    if (gender        !== undefined) update.gender         = gender;
-    if (isActive      !== undefined) update.isActive       = isActive;
+    if (gender         !== undefined) update.gender         = gender;
+    if (isActive       !== undefined) update.isActive       = isActive;
     if (password) {
       update.password = await bcrypt.hash(password, 10);
     }
@@ -88,6 +93,8 @@ router.put('/:id', protect, adminOnly, async (req, res) => {
     }).select('-password');
     if (!trainer) return res.status(404).json({ message: 'Trainer not found' });
     cache.del(TRAINERS_CACHE_KEY);
+    cache.del(MEMBERS_CACHE_KEY_MIRROR);
+    cache.del('users:admin:all');
     res.json(trainer);
   } catch (err) { sendDbError(res, err); }
 });
@@ -101,6 +108,7 @@ router.delete('/:id', protect, adminOnly, async (req, res) => {
     await User.updateMany({ assignedTrainer: req.params.id }, { $unset: { assignedTrainer: 1 } });
     cache.del(TRAINERS_CACHE_KEY);
     cache.del(MEMBERS_CACHE_KEY_MIRROR);
+    cache.del('users:admin:all');
     res.json({ message: 'Trainer deleted' });
   } catch (err) { sendDbError(res, err); }
 });

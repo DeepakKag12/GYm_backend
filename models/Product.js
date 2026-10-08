@@ -5,9 +5,9 @@ const productSchema = new mongoose.Schema({
   description: { type: String },
   category:    { type: String, enum: ['protein', 'creatine', 'pre-workout', 'vitamins', 'weight-gainer', 'fat-burner', 'bcaa', 'accessories', 'apparel', 'other'], required: true },
   brand:       { type: String },
-  price:       { type: Number, required: true },
-  discountPrice: { type: Number },
-  stock:       { type: Number, default: 0 },
+  price:         { type: Number, required: true, min: [0, 'Price cannot be negative'] },
+  discountPrice: { type: Number, min: [0, 'Discount price cannot be negative'] },
+  stock:         { type: Number, default: 0, min: [0, 'Stock cannot be negative'] },
   images:      [{ type: String }],
   video:       { type: String },   // Cloudinary mp4 URL or YouTube link
   flavors:     [{ type: String }],

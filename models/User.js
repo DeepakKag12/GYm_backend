@@ -17,6 +17,7 @@ const userSchema = new mongoose.Schema({
   // Membership fields
   specialization: { type: String, default: '' },  // for trainers
   membershipPlan: { type: String, enum: ['monthly', 'quarterly', 'half-yearly', 'yearly'], default: 'monthly' },
+  membershdsipPlan: { type: String }, // alias for backward compatibility with legacy documents
   membershipStart: { type: Date },
   membershipEnd:   { type: Date },
   membershipStatus: { type: String, enum: ['active', 'expired', 'pending'], default: 'pending' },
@@ -30,9 +31,12 @@ const userSchema = new mongoose.Schema({
   notifyWhatsApp: { type: Boolean, default: true },
   notifyEmail:    { type: Boolean, default: true },
   // Notification tracking
-  reminderSent7days:  { type: Boolean, default: false },
-  reminderSent3days:  { type: Boolean, default: false },
-  reminderSentExpiry: { type: Boolean, default: false },
+  reminderSent7days:       { type: Boolean, default: false },
+  reminderSent3days:       { type: Boolean, default: false },
+  reminderSentExpiry:      { type: Boolean, default: false },
+  reminderSentWA2days:     { type: Boolean, default: false },
+  reminderSentWAExpiry:    { type: Boolean, default: false },
+  reminderSentWA1dayAfter: { type: Boolean, default: false },
 
   /**
    * Which reminder slot this member was last sent, as "YYYY-MM-DD-am|pm" in the

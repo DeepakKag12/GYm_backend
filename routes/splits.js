@@ -116,6 +116,10 @@ router.get('/', protect, trainerOrAdmin, async (req, res) => {
 router.post('/', protect, trainerOrAdmin, async (req, res) => {
   try {
     const split = await WorkoutSplit.create({ ...req.body, createdBy: req.user._id });
+    if (split.isDefault) {
+      await WorkoutSplit.updateMany({ _id: { $ne: split._id } }, { isDefault: false });
+      cache.delPattern('split:assigned:');
+    }
     // Bust assigned-split cache for the member this was created for
     if (req.body.member) cache.del(`split:assigned:${req.body.member}`);
     cache.del(SPLITS_LIST_KEY);
@@ -128,7 +132,10 @@ router.put('/:id', protect, trainerOrAdmin, async (req, res) => {
   try {
     const split = await WorkoutSplit.findByIdAndUpdate(req.params.id, req.body, { new: true });
     if (!split) return res.status(404).json({ message: 'Split not found' });
-    // Bust assigned cache for the member
+    if (split.isDefault) {
+      await WorkoutSplit.updateMany({ _id: { $ne: split._id } }, { isDefault: false });
+    }
+    // Bust assigned cache for the member and all defaults
     if (split.member) cache.del(`split:assigned:${split.member}`);
     cache.del(SPLITS_LIST_KEY);
     cache.delPattern('split:assigned:');

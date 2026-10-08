@@ -13,7 +13,8 @@ const WorkoutSplit = require('../models/WorkoutSplit');
 const Exercise = require('../models/Exercise');
 const DietPlan = require('../models/DietPlan');
 const { BRAND, SITE_URL } = require('../utils/emailTemplate');
-const { runFeeReminderSweep, daysRemaining } = require('../services/feeReminder');
+const { calcExpiry, daysRemaining } = require('../utils/dateUtils');
+const { runFeeReminderSweep } = require('../services/feeReminder');
 const Payment = require('../models/Payment');
 const cache = require('../utils/cache');
 
@@ -47,18 +48,15 @@ async function sendWelcome(member, { usedPhoneAsPassword } = {}) {
   }, { channels: ['website', 'email', 'whatsapp'] });
 }
 
-/* ── helpers ── */
-const PLAN_MONTHS = { monthly: 1, quarterly: 3, 'half-yearly': 6, yearly: 12 };
 
-function calcExpiry(startDate, plan) {
-  if (!startDate || !plan) return null;
-  const d = new Date(startDate);
-  const months = PLAN_MONTHS[plan] || 1;
-  d.setMonth(d.getMonth() + months);
-  return d;
-}
 
 const MEMBERS_CACHE_KEY = 'members:all';
+const USERS_ADMIN_ALL_KEY = 'users:admin:all';
+
+function bustMembersCache() {
+  cache.del(MEMBERS_CACHE_KEY);
+  cache.del(USERS_ADMIN_ALL_KEY);
+}
 
 // GET /api/members/roster — safe member list for trainer dashboards
 router.get('/roster', protect, trainerOrAdmin, async (req, res) => {
@@ -71,13 +69,13 @@ router.get('/roster', protect, trainerOrAdmin, async (req, res) => {
   } catch (err) { sendDbError(res, err); }
 });
 
-// GET /api/members
+// GET /api/members — by default returns members; ?all=1 returns all accounts (members, trainers, admins)
 router.get('/', protect, adminOnly, async (req, res) => {
   try {
-    const members = await cache.getOrSet(MEMBERS_CACHE_KEY, 60, () =>
-      // -password: this list was shipping every member's bcrypt hash to the
-      // browser, where it also sat in the client-side cache.
-      User.find({ role: 'member' })
+    const isAll = req.query.all === '1' || req.query.role === 'all';
+    const cacheKey = isAll ? 'users:admin:all' : MEMBERS_CACHE_KEY;
+    const members = await cache.getOrSet(cacheKey, 60, () =>
+      User.find(isAll ? {} : { role: 'member' })
         .select('-password')
         .populate('assignedTrainer', 'name phone')
         .sort({ createdAt: -1 })
@@ -193,7 +191,7 @@ router.post('/', protect, adminOnly, async (req, res) => {
     }
 
     invalidateAnalytics();
-    cache.del(MEMBERS_CACHE_KEY);
+    bustMembersCache();
     // Send welcome message (non-blocking)
     sendWelcome(member, { usedPhoneAsPassword }).catch(() => {});
     const safe = member.toObject(); delete safe.password;
@@ -242,7 +240,7 @@ router.put('/:id', protect, adminOnly, async (req, res) => {
     // Renewal handling. The flags are only touched when the end date actually
     // MOVES — resetting them on every edit meant that correcting a typo in
     // someone's name could make them receive the same reminder twice.
-    const current = await User.findById(req.params.id).select('membershipEnd membershipStatus').lean();
+    const current = await User.findById(req.params.id).select('membershipEnd membershipStatus feeAmount feeDueAmount feePaid').lean();
     if (!current) return res.status(404).json({ message: 'Member not found' });
 
     const endMoved = update.membershipEnd !== undefined && (
@@ -251,12 +249,19 @@ router.put('/:id', protect, adminOnly, async (req, res) => {
     );
 
     if (endMoved) {
-      update.reminderSent7days  = false;
-      update.reminderSent3days  = false;
-      update.reminderSentExpiry = false;
-      const renewalFee = Math.max(0, Number(req.body.feeAmount) || 0);
+      update.reminderSent7days        = false;
+      update.reminderSent3days        = false;
+      update.reminderSentExpiry       = false;
+      update.reminderSentWA2days      = false;
+      update.reminderSentWAExpiry     = false;
+      update.reminderSentWA1dayAfter  = false;
+      const renewalFee = req.body.feeAmount !== undefined && req.body.feeAmount !== ''
+        ? Math.max(0, Number(req.body.feeAmount) || 0)
+        : Math.max(0, Number(current.feeAmount) || 0);
+      update.feeAmount = renewalFee;
+
       const renewalPayment = req.body.initialPayment === undefined || req.body.initialPayment === ''
-        ? (req.body.feePaid === false ? 0 : renewalFee)
+        ? (req.body.feePaid === false ? 0 : (req.body.feePaid === true ? renewalFee : (current.feePaid ? renewalFee : 0)))
         : Math.max(0, Number(req.body.initialPayment) || 0);
       if (renewalPayment > renewalFee) {
         return res.status(400).json({ message: 'Payment cannot be greater than the renewal fee.' });
@@ -270,6 +275,14 @@ router.put('/:id', protect, adminOnly, async (req, res) => {
       const endsInFuture = new Date(update.membershipEnd) > new Date();
       if (endsInFuture && req.body.membershipStatus === undefined) {
         update.membershipStatus = 'active';
+      }
+    } else {
+      // Sync feePaid and feeDueAmount when date was not moved
+      if (update.feePaid === true && update.feeDueAmount === undefined) {
+        update.feeDueAmount = 0;
+      } else if (update.feePaid === false && (update.feeDueAmount === undefined || update.feeDueAmount === 0)) {
+        const fee = update.feeAmount !== undefined ? Number(update.feeAmount) : Number(current.feeAmount || 0);
+        update.feeDueAmount = fee;
       }
     }
 
@@ -332,7 +345,7 @@ router.put('/:id', protect, adminOnly, async (req, res) => {
     // Bust cached user so the protect middleware picks up new data
     cache.del(`user:${req.params.id}`);
     cache.del(`member:profile:${req.params.id}`);
-    cache.del(MEMBERS_CACHE_KEY);
+    bustMembersCache();
     invalidateAnalytics();
     res.json(member);
   } catch (err) { sendDbError(res, err, 'Could not save this member.'); }
@@ -363,7 +376,7 @@ router.delete('/:id', protect, adminOnly, async (req, res) => {
 
     cache.del(`user:${id}`);
     cache.del(`member:profile:${id}`);
-    cache.del(MEMBERS_CACHE_KEY);
+    bustMembersCache();
     cache.delPattern('notifs:');
     cache.delPattern('split:');
     invalidateAnalytics();
@@ -420,7 +433,7 @@ router.patch('/:id/role', protect, adminOnly, async (req, res) => {
     // `protect` caches the user for 5 minutes; without this the new role would
     // not take effect until that expired.
     cache.del(`user:${user._id}`);
-    cache.del(MEMBERS_CACHE_KEY);
+    bustMembersCache();
     cache.del('trainers:active');   // the user may have moved in or out of the trainer list
     invalidateAnalytics();
 
@@ -481,7 +494,7 @@ router.post('/:id/reminder', protect, adminOnly, async (req, res) => {
     // for a member with no number would make the "still to contact" list lie.
     if (whatsappUrl) {
       await User.updateOne({ _id: member._id }, { $set: { lastWhatsAppAt: new Date() } });
-      cache.del(MEMBERS_CACHE_KEY);
+      bustMembersCache();
     }
 
     res.json({
@@ -509,12 +522,12 @@ router.post('/run-reminders', protect, adminOnly, async (req, res) => {
       membershipEnd: { $gte: now, $lte: cutoff },
     });
     const summary = await notifyMembers(members, member => {
-      const daysLeft = Math.ceil((new Date(member.membershipEnd) - now) / 86400000);
+      const daysLeft = daysRemaining(member.membershipEnd, now) ?? 0;
       return {
         type: 'fee-reminder',
-        title: `Membership ends in ${daysLeft} day(s)`,
-        subject: `Your ${BRAND} membership expires in ${daysLeft} day(s)`,
-        message: `Dear ${member.name}, your ${BRAND} membership expires in ${daysLeft} day(s) on ${new Date(member.membershipEnd).toLocaleDateString('en-IN')}. Renew now to keep training without a break.`,
+        title: daysLeft === 0 ? 'Membership ends today' : `Membership ends in ${daysLeft} day(s)`,
+        subject: `Your ${BRAND} membership expires ${daysLeft === 0 ? 'today' : `in ${daysLeft} day(s)`}`,
+        message: `Dear ${member.name}, your ${BRAND} membership expires ${daysLeft === 0 ? 'today' : `in ${daysLeft} day(s)`} on ${new Date(member.membershipEnd).toLocaleDateString('en-IN')}. Renew now to keep training without a break.`,
         ctaText: 'Renew membership',
         ctaUrl: `${process.env.FRONTEND_URL || SITE_URL}/plans`,
       };
@@ -544,13 +557,13 @@ router.post('/bulk-reminder', protect, adminOnly, async (req, res) => {
     const renewUrl = `${process.env.FRONTEND_URL || SITE_URL}/plans`;
     // One dispatch per member, WhatsApp + email in parallel, 5 members at a time.
     const summary = await notifyMembers(members, member => {
-      const daysLeft = Math.ceil((new Date(member.membershipEnd) - now) / 86400000);
+      const daysLeft = daysRemaining(member.membershipEnd, now) ?? 0;
       const msg = customMessage ||
-        `Dear ${member.name}, your ${BRAND} membership expires in ${daysLeft} day(s) on ${new Date(member.membershipEnd).toLocaleDateString('en-IN')}. Renew now to keep training without a break.`;
+        `Dear ${member.name}, your ${BRAND} membership expires ${daysLeft === 0 ? 'today' : `in ${daysLeft} day(s)`} on ${new Date(member.membershipEnd).toLocaleDateString('en-IN')}. Renew now to keep training without a break.`;
       return {
         type: 'fee-reminder',
-        title: `Membership ends in ${daysLeft} day(s)`,
-        subject: `Your ${BRAND} membership expires in ${daysLeft} day(s)`,
+        title: daysLeft === 0 ? 'Membership ends today' : `Membership ends in ${daysLeft} day(s)`,
+        subject: `Your ${BRAND} membership expires ${daysLeft === 0 ? 'today' : `in ${daysLeft} day(s)`}`,
         message: msg,
         ctaText: 'Renew membership',
         ctaUrl: renewUrl,
