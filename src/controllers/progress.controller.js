@@ -1,0 +1,85 @@
+const ProgressEntry = require('../models/ProgressEntry.model');
+const cloudinary = require('../config/cloudinary');
+const cache = require('../utils/cache');
+const { sendDbError } = require('../utils/dbError');
+const { asyncHandler } = require('../utils/asyncHandler');
+
+async function uploadPhoto(file) {
+  const opts = { folder: 'progress', quality: 'auto', fetch_format: 'auto' };
+  if (file.tempFilePath) return cloudinary.uploader.upload(file.tempFilePath, opts);
+  return new Promise((resolve, reject) => {
+    const stream = cloudinary.uploader.upload_stream(opts, (err, r) => err ? reject(err) : resolve(r));
+    stream.end(file.data);
+  });
+}
+
+function progressKey(id) {
+  return `progress:member:${id}`;
+}
+
+// GET /api/progress/me
+const getMyProgress = asyncHandler(async (req, res) => {
+  try {
+    const entries = await cache.getOrSet(progressKey(req.user._id), 60, () =>
+      ProgressEntry.find({ member: req.user._id }).sort({ date: -1 }).lean()
+    );
+    res.json(entries);
+  } catch (err) {
+    sendDbError(res, err);
+  }
+});
+
+// GET /api/progress/:memberId
+const getMemberProgress = asyncHandler(async (req, res) => {
+  try {
+    const entries = await cache.getOrSet(progressKey(req.params.memberId), 60, () =>
+      ProgressEntry.find({ member: req.params.memberId }).sort({ date: -1 }).lean()
+    );
+    res.json(entries);
+  } catch (err) {
+    sendDbError(res, err);
+  }
+});
+
+// POST /api/progress
+const createProgressEntry = asyncHandler(async (req, res) => {
+  try {
+    const { date, weight, bodyFat, chest, waist, hips, arms, thighs, notes } = req.body;
+    let photoUrl = '';
+    if (req.files?.photo) {
+      const result = await uploadPhoto(req.files.photo);
+      photoUrl = result.secure_url;
+    }
+    const entry = await ProgressEntry.create({
+      member: req.user._id, date, weight, bodyFat, chest, waist, hips, arms, thighs, notes, photo: photoUrl
+    });
+    cache.del(progressKey(req.user._id));
+    res.status(201).json(entry);
+  } catch (err) {
+    sendDbError(res, err);
+  }
+});
+
+// DELETE /api/progress/:id
+const deleteProgressEntry = asyncHandler(async (req, res) => {
+  try {
+    const entry = await ProgressEntry.findById(req.params.id);
+    if (!entry) return res.status(404).json({ message: 'Entry not found' });
+    if (entry.member.toString() !== req.user._id.toString() && req.user.role !== 'admin') {
+      return res.status(403).json({ message: 'Forbidden' });
+    }
+    await entry.deleteOne();
+    cache.del(progressKey(entry.member));
+    if (entry.member.toString() !== req.user._id.toString()) cache.del(progressKey(req.user._id));
+    res.json({ message: 'Deleted' });
+  } catch (err) {
+    sendDbError(res, err);
+  }
+});
+
+module.exports = {
+  getMyProgress,
+  getMemberProgress,
+  createProgressEntry,
+  deleteProgressEntry,
+};

@@ -1,6 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { adminOnly, trainerOrAdmin } = require('../middleware/auth');
+const { adminOnly, trainerOrAdmin } = require('../src/middlewares/auth.middleware');
 
 test('Role guards grant or reject appropriately', () => {
   // adminOnly

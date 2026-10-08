@@ -21,17 +21,17 @@ require('dotenv').config();
 const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
 
-const User           = require('../models/User');
-const Exercise       = require('../models/Exercise');
-const Product        = require('../models/Product');
-const DietPlan       = require('../models/DietPlan');
-const Transformation = require('../models/Transformation');
-const Order          = require('../models/Order');
-const Payment        = require('../models/Payment');
-const Notification   = require('../models/Notification');
-const Enquiry        = require('../models/Enquiry');
-const ProgressEntry  = require('../models/ProgressEntry');
-const WorkoutSplit   = require('../models/WorkoutSplit');
+const User           = require('../src/models/User.model');
+const Exercise       = require('../src/models/Exercise.model');
+const Product        = require('../src/models/Product.model');
+const DietPlan       = require('../src/models/DietPlan.model');
+const Transformation = require('../src/models/Transformation.model');
+const Order          = require('../src/models/Order.model');
+const Payment        = require('../src/models/Payment.model');
+const Notification   = require('../src/models/Notification.model');
+const Enquiry        = require('../src/models/Enquiry.model');
+const ProgressEntry  = require('../src/models/ProgressEntry.model');
+const WorkoutSplit   = require('../src/models/WorkoutSplit.model');
 
 const DRY = process.argv.includes('--dry-run');
 const U = (id, w = 800) => `https://images.unsplash.com/${id}?w=${w}&q=75&auto=format&fit=crop`;

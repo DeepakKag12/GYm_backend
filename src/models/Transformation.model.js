@@ -6,6 +6,8 @@ const transformationSchema = new mongoose.Schema({
   description:  { type: String },
   beforeImage:  { type: String, required: true },
   afterImage:   { type: String, required: true },
+  video:        { type: String, default: '' },
+  videoUrl:     { type: String, default: '' },
   duration:     { type: String },      // e.g. "3 months"
   weightLost:   { type: String },
   muscleGained: { type: String },

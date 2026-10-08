@@ -9,9 +9,9 @@
  * channel worked, and for a failure the provider's error code and the fix.
  */
 require('dotenv').config();
-const { channelHealth, notifyMember } = require('../services/notify');
-const { verifyMetaWhatsApp } = require('../utils/whatsapp');
-const { verifyTransport } = require('../utils/email');
+const { channelHealth, notifyMember } = require('../src/services/notify');
+const { verifyMetaWhatsApp } = require('../src/utils/whatsapp');
+const { verifyTransport } = require('../src/utils/email');
 
 (async () => {
   const [phone, email] = process.argv.slice(2);

@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node scripts/freePort.js && node server.js",
     "dev": "node scripts/freePort.js && nodemon server.js",
-    "seed": "node seed.js",
+    "seed": "node scripts/seed.js",
+    "reset": "node scripts/reset.js",
     "test": "node --test tests/**/*.test.js",
     "test:notify": "node scripts/testNotification.js"
   },
@@ -23,7 +24,6 @@
     "helmet": "^8.3.0",
     "jsonwebtoken": "^9.0.2",
     "mongoose": "^8.4.1",
-    "multer": "^1.4.5-lts.1",
     "node-cron": "^3.0.3",
     "nodemailer": "^6.9.13",
     "pdfkit": "^0.20.2"

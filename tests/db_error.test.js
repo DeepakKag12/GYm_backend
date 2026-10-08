@@ -1,6 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { describeDbError } = require('../utils/dbError');
+const { describeDbError } = require('../src/utils/dbError');
 
 test('describeDbError maps Mongo errors to friendly client responses', () => {
   // Duplicate key (E11000)

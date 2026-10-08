@@ -1,6 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { canonicalPhone } = require('../utils/phone');
+const { canonicalPhone } = require('../src/utils/phone');
 
 test('canonicalPhone normalizes Indian phone numbers correctly', () => {
   // Plain 10 digits

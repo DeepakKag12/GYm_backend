@@ -14,8 +14,8 @@
  */
 
 const assert = require('assert');
-const { calcExpiry, daysRemaining, localDate, PLAN_MONTHS } = require('../utils/dateUtils');
-const { planReminder } = require('../services/feeReminder');
+const { calcExpiry, daysRemaining, localDate, PLAN_MONTHS } = require('../src/utils/dateUtils');
+const { planReminder } = require('../src/services/feeReminder');
 
 let passedTests = 0;
 let totalTests = 0;

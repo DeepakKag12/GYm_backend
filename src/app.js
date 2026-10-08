@@ -1,10 +1,12 @@
 const express = require('express');
+const mongoose = require('mongoose');
 const cors = require('cors');
 const compression = require('compression');
 const rateLimit = require('express-rate-limit');
 const helmet = require('helmet');
 const fileUpload = require('express-fileupload');
 const path = require('path');
+const { connectDB } = require('./config/db');
 const { enforceJwtSecret } = require('./utils/jwtSecret');
 const apiRoutes = require('./routes/index');
 const { errorHandler } = require('./middlewares/error.middleware');
@@ -119,6 +121,40 @@ app.get('/', (req, res) => {
 app.get('/api/_cache/stats', (req, res) => {
   res.set('Cache-Control', 'no-store');
   res.json(require('./utils/cache').getStats());
+});
+
+// Health check endpoint
+app.get('/api/health', async (req, res) => {
+  const STATE = ['disconnected', 'connected', 'connecting', 'disconnecting'];
+  const started = Date.now();
+  let ok = true, error;
+  try { await connectDB(); } catch (err) { ok = false; error = err.message; }
+  res.set('Cache-Control', 'no-store');
+  res.status(ok ? 200 : 503).json({
+    status: ok ? 'ok' : 'degraded',
+    db: STATE[mongoose.connection.readyState] || 'unknown',
+    mongoUriSet: Boolean(process.env.MONGO_URI),
+    tookMs: Date.now() - started,
+    error,
+  });
+});
+
+// Every /api request waits for a live connection before touching a model.
+app.use('/api', async (req, res, next) => {
+  try {
+    await connectDB();
+    next();
+  } catch (first) {
+    try {
+      await connectDB();
+      return next();
+    } catch (err) {
+      res.status(503).json({
+        message: 'Database unavailable. Please try again in a moment.',
+        detail: process.env.NODE_ENV === 'production' ? undefined : err.message,
+      });
+    }
+  }
 });
 
 // Rate limit guards on routes

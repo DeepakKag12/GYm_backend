@@ -1,64 +1,12 @@
 require('dotenv').config();
-const mongoose = require('mongoose');
 const app = require('./app');
+const { connectDB } = require('./config/db');
 const { reportJwtSecretAtBoot } = require('./utils/jwtSecret');
 
 reportJwtSecretAtBoot();
 
-let connPromise = null;
-
-function connectDB() {
-  if (mongoose.connection.readyState === 1) return Promise.resolve(mongoose.connection);
-
-  if (!process.env.MONGO_URI) {
-    return Promise.reject(new Error('MONGO_URI environment variable is not set'));
-  }
-
-  if (!connPromise) {
-    connPromise = mongoose.connect(process.env.MONGO_URI, {
-      serverSelectionTimeoutMS: 4000,
-      connectTimeoutMS: 4000,
-      socketTimeoutMS: 20000,
-      maxPoolSize: 10,
-      minPoolSize: 0,
-    }).then(m => {
-      console.log('✅ MongoDB connected');
-      return m;
-    }).catch(err => {
-      connPromise = null;
-      console.error('MongoDB connection error:', err.message);
-      throw err;
-    });
-  }
-  return connPromise;
-}
-
-mongoose.connection.on('disconnected', () => {
-  console.warn('MongoDB disconnected — will reconnect on the next request');
-  connPromise = null;
-});
-
-mongoose.connection.on('error', err => {
-  console.error('MongoDB error:', err.message);
-});
-
+// Connect to MongoDB
 connectDB().catch(() => {});
-
-// Health Check Endpoint
-app.get('/api/health', async (req, res) => {
-  const STATE = ['disconnected', 'connected', 'connecting', 'disconnecting'];
-  const started = Date.now();
-  let ok = true, error;
-  try { await connectDB(); } catch (err) { ok = false; error = err.message; }
-  res.set('Cache-Control', 'no-store');
-  res.status(ok ? 200 : 503).json({
-    status: ok ? 'ok' : 'degraded',
-    db: STATE[mongoose.connection.readyState] || 'unknown',
-    mongoUriSet: Boolean(process.env.MONGO_URI),
-    tookMs: Date.now() - started,
-    error,
-  });
-});
 
 // Notifications report on boot
 try {
@@ -72,7 +20,7 @@ try {
 // Start cron jobs
 if (process.env.VERCEL !== '1') {
   try {
-    require('../jobs/feeReminder');
+    require('./jobs/feeReminder');
   } catch (e) {
     // Background cron start
   }
@@ -85,7 +33,31 @@ if (!process.env.VERCEL) {
 
   server.on('error', err => {
     if (err.code !== 'EADDRINUSE') throw err;
-    console.error(`\n❌ Port ${PORT} is already in use.\n`);
+
+    let holder = '';
+    try {
+      const { execSync } = require('child_process');
+      const sh = c => execSync(c, { stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim();
+      if (process.platform !== 'win32') {
+        const pid = sh(`lsof -tiTCP:${PORT} -sTCP:LISTEN`).split('\n')[0];
+        if (pid) {
+          const cmd = sh(`ps -o command= -p ${pid}`).slice(0, 60);
+          let dir = '';
+          try { dir = sh(`lsof -a -p ${pid} -d cwd -Fn`).split('\n').find(l => l[0] === 'n').slice(1); } catch { /* not available */ }
+          holder = `\n  Held by pid ${pid}: ${cmd}${dir ? `\n  Running in: ${dir}` : ''}`;
+        }
+      }
+    } catch { /* lsof missing */ }
+
+    console.error(
+      `\n❌ Port ${PORT} is already in use, so this server did not start.${holder}\n\n` +
+      `  If that is an old copy of THIS server, stop it and try again:\n` +
+      `      npm run dev            (frees the port first, then starts)\n\n` +
+      `  If it belongs to a different project, leave it alone and use another port:\n` +
+      `      PORT=5001 npm start\n` +
+      `  — then set REACT_APP_API_URL=http://localhost:5001/api in the frontend's\n` +
+      `    .env.development.local, or the site will talk to the wrong backend.\n`,
+    );
     process.exit(1);
   });
 }
