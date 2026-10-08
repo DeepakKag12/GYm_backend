@@ -16,7 +16,7 @@ const siteSettingsSchema = new mongoose.Schema({
   key: { type: String, default: 'site', unique: true, immutable: true },
 
   gymName:   { type: String, default: 'FitNation by Ajeet', trim: true },
-  ownerName: { type: String, default: 'Ajeet Kag', trim: true },
+  ownerName: { type: String, default: 'Ajeet Jamadari', trim: true },
   tagline:   { type: String, default: 'Uniting a healthier world', trim: true },
 
   phone:     { type: String, default: '9630906906', trim: true },
