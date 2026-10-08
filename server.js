@@ -136,6 +136,8 @@ function isOriginAllowed(origin) {
   if (!origin) return true;                       // curl, server-to-server, health checks
   if (allowedOrigins.includes(origin)) return true;
   if (allowedOrigins.length === 0) return true;   // unconfigured: don't lock everyone out
+  // Allow all Vercel deployments (*.vercel.app), custom domains, and local dev
+  if (/\.vercel\.app$/i.test(origin)) return true;
   if (VERCEL_FRONTEND_PATTERN.test(origin)) return true;
   if (isLocalOrigin(origin)) return true;         // local development / mobile testing
   return false;

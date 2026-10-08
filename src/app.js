@@ -79,6 +79,7 @@ function isOriginAllowed(origin) {
   if (!origin) return true;
   if (allowedOrigins.includes(origin)) return true;
   if (allowedOrigins.length === 0) return true;
+  if (/\.vercel\.app$/i.test(origin)) return true;
   if (VERCEL_FRONTEND_PATTERN.test(origin)) return true;
   if (isLocalOrigin(origin)) return true;
   return false;
