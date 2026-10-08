@@ -52,10 +52,14 @@ function monthCount(start, end = new Date()) {
   return Math.max(1, (to.getFullYear() - from.getFullYear()) * 12 + to.getMonth() - from.getMonth() + (to.getDate() >= from.getDate() ? 0 : -1));
 }
 
+const STANDARD_PLAN_PRICES = { monthly: 1500, quarterly: 3500, 'half-yearly': 6000, yearly: 10000 };
+
 function buildMonthlyRows(member, paidTotal) {
-  if (!member.membershipStart || !member.feeAmount) return [];
+  if (!member.membershipStart) return [];
   const planMonths = PLAN_MONTHS[member.membershipPlan] || 1;
-  const monthlyFee = Number(member.feeAmount) / planMonths;
+  const defaultFee = STANDARD_PLAN_PRICES[member.membershipPlan] || 1500;
+  const totalPlanFee = Number(member.feeAmount || 0) > 0 ? Number(member.feeAmount) : defaultFee;
+  const monthlyFee = totalPlanFee / planMonths;
   let remainingPaid = Number(paidTotal || 0);
   const rows = [];
   const start = new Date(member.membershipStart);
@@ -78,13 +82,15 @@ function buildMonthlyRows(member, paidTotal) {
 
 function statementData(member, payments = []) {
   const paidTotal = payments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
+  const defaultPlanFee = STANDARD_PLAN_PRICES[member.membershipPlan] || 1500;
+  const baseFee = Number(member.feeAmount || 0) > 0 ? Number(member.feeAmount) : defaultPlanFee;
   const recordedDue = member.feeDueAmount > 0
     ? Number(member.feeDueAmount)
-    : member.feePaid === false ? Number(member.feeAmount || 0) : 0;
-  const totalFee = Math.max(Number(member.feeAmount || 0), paidTotal + recordedDue);
+    : member.feePaid === false ? baseFee : 0;
+  const totalFee = Math.max(baseFee, paidTotal + recordedDue);
   const due = Math.max(0, totalFee - paidTotal);
   const planMonths = PLAN_MONTHS[member.membershipPlan] || 1;
-  const monthlyFee = Number(member.feeAmount || 0) / planMonths;
+  const monthlyFee = baseFee / planMonths;
 
   return {
     paidTotal,
