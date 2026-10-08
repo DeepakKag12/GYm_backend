@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { protect, adminOnly } = require('../middlewares/auth.middleware');
+const { publicCache } = require('../middlewares/publicCache.middleware');
 const {
   getAllPlans,
   createPlan,
@@ -9,7 +10,7 @@ const {
 } = require('../controllers/plans.controller');
 
 // Public route to list plans (and ?all=1 for admin view)
-router.get('/', getAllPlans);
+router.get('/', publicCache(120), getAllPlans);
 
 // Protected admin routes
 router.post('/', protect, adminOnly, createPlan);

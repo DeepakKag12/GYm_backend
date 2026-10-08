@@ -106,5 +106,6 @@ userSchema.index({ role: 1, membershipEnd: 1 });
 userSchema.index({ role: 1, feePaid: 1 });
 userSchema.index({ role: 1, createdAt: -1 });
 userSchema.index({ assignedTrainer: 1 });
+userSchema.index({ role: 1, isActive: 1, membershipStatus: 1, membershipEnd: 1 });
 
 module.exports = mongoose.model('User', userSchema);

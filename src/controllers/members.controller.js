@@ -427,7 +427,7 @@ const runRemindersSweep = asyncHandler(async (req, res) => {
       isActive: { $ne: false },
       membershipStatus: 'active',
       membershipEnd: { $gte: now, $lte: cutoff },
-    });
+    }).lean();
     const summary = await notifyMembers(members, member => {
       const daysLeft = daysRemaining(member.membershipEnd, now) ?? 0;
       return {
@@ -456,9 +456,10 @@ const sendBulkReminder = asyncHandler(async (req, res) => {
 
     const members = await User.find({
       role: 'member',
+      isActive: { $ne: false },
       membershipStatus: 'active',
       membershipEnd: { $gte: now, $lte: cutoff }
-    });
+    }).lean();
 
     const renewUrl = `${process.env.FRONTEND_URL || SITE_URL}/plans`;
     const summary = await notifyMembers(members, member => {

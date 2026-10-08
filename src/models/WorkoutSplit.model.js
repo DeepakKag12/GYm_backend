@@ -22,5 +22,7 @@ const workoutSplitSchema = new mongoose.Schema({
 // Admin list (newest first) and the per-member lookup used by the planner.
 workoutSplitSchema.index({ createdAt: -1 });
 workoutSplitSchema.index({ member: 1, createdAt: -1 });
+workoutSplitSchema.index({ isDefault: 1, isActive: 1 });
+workoutSplitSchema.index({ member: 1, isActive: 1, title: 1 });
 
 module.exports = mongoose.model('WorkoutSplit', workoutSplitSchema);

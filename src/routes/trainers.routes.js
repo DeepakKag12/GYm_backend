@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { protect, adminOnly } = require('../middlewares/auth.middleware');
+const { publicCache } = require('../middlewares/publicCache.middleware');
 const {
   getAllTrainers,
   createTrainer,
@@ -9,7 +10,7 @@ const {
 } = require('../controllers/trainers.controller');
 
 // Public route to get trainers (or admin query ?all=1)
-router.get('/', getAllTrainers);
+router.get('/', publicCache(120), getAllTrainers);
 
 // Admin-only management
 router.post('/', protect, adminOnly, createTrainer);

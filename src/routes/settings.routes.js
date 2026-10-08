@@ -6,8 +6,9 @@ const {
   updateSettings,
 } = require('../controllers/settings.controller');
 const { protect, adminOnly } = require('../middlewares/auth.middleware');
+const { publicCache } = require('../middlewares/publicCache.middleware');
 
-router.get('/', getSettings);
+router.get('/', publicCache(120), getSettings);
 router.post('/upload-image', protect, adminOnly, uploadImage);
 router.put('/', protect, adminOnly, updateSettings);
 

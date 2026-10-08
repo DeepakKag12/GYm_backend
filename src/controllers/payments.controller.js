@@ -426,19 +426,20 @@ const settleDuePayments = asyncHandler(async (req, res) => {
           ],
         }).select('name feeAmount feeDueAmount membershipStart membershipEnd').session(session);
 
-        for (const member of members) {
-          const amount = member.feeDueAmount > 0 ? member.feeDueAmount : member.feeAmount;
-          await Payment.create([{
-            member: member._id,
-            source: 'membership',
-            kind: 'adjustment',
-            amount,
-            method: req.body.method || 'cash',
-            note: req.body.note || 'Due fee settled',
-            periodStart: member.membershipStart,
-            periodEnd: member.membershipEnd,
-            recordedBy: req.user._id,
-          }], { session });
+        const paymentDocs = members.map(member => ({
+          member: member._id,
+          source: 'membership',
+          kind: 'adjustment',
+          amount: member.feeDueAmount > 0 ? member.feeDueAmount : member.feeAmount,
+          method: req.body.method || 'cash',
+          note: req.body.note || 'Due fee settled',
+          periodStart: member.membershipStart,
+          periodEnd: member.membershipEnd,
+          recordedBy: req.user._id,
+        }));
+
+        if (paymentDocs.length > 0) {
+          await Payment.insertMany(paymentDocs, { session });
         }
 
         settledCount = members.length;
@@ -472,27 +473,35 @@ const backfillPayments = asyncHandler(async (req, res) => {
       feeAmount: { $gt: 0 },
     }).select('name feeAmount membershipStart membershipEnd createdAt').lean();
 
-    let created = 0, skipped = 0;
-    for (const m of members) {
+    const docs = members.map(m => {
       const start = m.membershipStart || m.createdAt;
       const key = `backfill:${m._id}:${start ? new Date(start).toISOString() : 'none'}`;
+      return {
+        member: m._id,
+        source: 'membership',
+        kind: 'new-membership',
+        amount: m.feeAmount,
+        periodStart: m.membershipStart,
+        periodEnd: m.membershipEnd,
+        idempotencyKey: key,
+        recordedBy: req.user._id,
+        note: 'Recorded from existing membership fee',
+        createdAt: start || new Date(),
+      };
+    });
+
+    let created = 0, skipped = 0;
+    if (docs.length > 0) {
       try {
-        await Payment.create({
-          member: m._id,
-          source: 'membership',
-          kind: 'new-membership',
-          amount: m.feeAmount,
-          periodStart: m.membershipStart,
-          periodEnd: m.membershipEnd,
-          idempotencyKey: key,
-          recordedBy: req.user._id,
-          note: 'Recorded from existing membership fee',
-          createdAt: start || new Date(),
-        });
-        created++;
+        const result = await Payment.insertMany(docs, { ordered: false });
+        created = result.length;
       } catch (err) {
-        if (err?.code === 11000) skipped++;
-        else throw err;
+        if (err?.name === 'MongoBulkWriteError' || err?.code === 11000) {
+          created = err.insertedDocs ? err.insertedDocs.length : (err.result?.nInserted || 0);
+          skipped = docs.length - created;
+        } else {
+          throw err;
+        }
       }
     }
 

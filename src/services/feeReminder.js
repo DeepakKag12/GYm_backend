@@ -168,38 +168,52 @@ async function runFeeReminderSweep({ slot = 'am' } = {}) {
     { concurrency: SWEEP_CONCURRENCY }
   );
 
-  // Mark flags for members we notified
+  // Mark flags for members we notified using bulkWrite for minimal DB round-trips
   let flagFailures = 0;
+  const updateOps = [];
   for (const member of members) {
     const plan = plans.get(String(member._id));
     if (!plan) continue;
-    try {
-      if (plan.slotKey) member.lastReminderSlot = plan.slotKey;
-      if (plan.flag) member[plan.flag] = true;
-      if (plan.waFlag) member[plan.waFlag] = true;
-      if (plan.expire) member.membershipStatus = 'expired';
-      await member.save();
-    } catch (err) {
-      flagFailures++;
-      console.error(`❌ Could not update reminder flag for ${member._id}: ${err.message}`);
+    const $set = {};
+    if (plan.slotKey) $set.lastReminderSlot = plan.slotKey;
+    if (plan.flag) $set[plan.flag] = true;
+    if (plan.waFlag) $set[plan.waFlag] = true;
+    if (plan.expire) $set.membershipStatus = 'expired';
+
+    if (Object.keys($set).length > 0) {
+      updateOps.push({
+        updateOne: {
+          filter: { _id: member._id },
+          update: { $set },
+        },
+      });
     }
   }
 
-  // Data integrity pass: anything past its end date is marked expired, even if
-  // it aged out of the reminder window and got no message. Otherwise a member
-  // who lapsed while the cron was down would sit as 'active' indefinitely.
-  let expiredMarked = 0;
-  for (const member of members) {
-    const left = daysRemaining(member.membershipEnd, now);
-    if (left === null || left >= 0) continue;
-    if (member.membershipStatus === 'expired') continue;
+  if (updateOps.length > 0) {
     try {
-      member.membershipStatus = 'expired';
-      await member.save();
-      expiredMarked++;
+      await User.bulkWrite(updateOps, { ordered: false });
     } catch (err) {
-      console.error(`❌ Could not mark ${member._id} expired: ${err.message}`);
+      flagFailures++;
+      console.error(`❌ Could not bulk update reminder flags: ${err.message}`);
     }
+  }
+
+  // Data integrity pass: anything past its end date is marked expired in a single atomic update.
+  // Otherwise a member who lapsed while the cron was down would sit as 'active' indefinitely.
+  let expiredMarked = 0;
+  try {
+    const expireRes = await User.updateMany(
+      {
+        role: 'member',
+        membershipStatus: { $ne: 'expired' },
+        membershipEnd: { $lt: now },
+      },
+      { $set: { membershipStatus: 'expired' } }
+    );
+    expiredMarked = expireRes.modifiedCount || 0;
+  } catch (err) {
+    console.error(`❌ Could not bulk mark expired members: ${err.message}`);
   }
 
   return {

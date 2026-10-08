@@ -133,7 +133,8 @@ const sendAdminNotification = asyncHandler(async (req, res) => {
     }
 
     const members = await User.find(query)
-      .select('_id name email phone whatsapp notifyEmail notifyWhatsApp membershipEnd');
+      .select('_id name email phone whatsapp notifyEmail notifyWhatsApp membershipEnd')
+      .lean();
 
     if (!members.length) {
       return res.json({ message: 'No members match the selected audience filter.', sent: 0, count: 0 });

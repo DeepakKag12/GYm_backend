@@ -30,79 +30,201 @@ const getSummary = asyncHandler(async (req, res) => {
       const thisMonthStart = monthStart(0);
       const lastMonthStart = monthStart(-1);
       const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+      const sevenDaysLater = new Date(now.getTime() + 7 * 86400000);
 
       const [
-        totalMembers, activeMembers, expiredMembers, pendingMembers,
-        totalOrders, totalExercises, totalDietPlans, totalTrainers,
-        revenueAgg, monthlyRevenueAgg, lastMonthRevenueAgg,
-        newMembers30d, newEnquiries, disabledMembers,
+        userAgg,
+        orderAgg,
+        paymentAgg,
+        totalOrders,
+        totalExercises,
+        totalDietPlans,
+        newEnquiries,
       ] = await Promise.all([
-        User.countDocuments({ role: 'member' }),
-        User.countDocuments({ role: 'member', membershipStatus: 'active' }),
-        User.countDocuments({ role: 'member', membershipStatus: 'expired' }),
-        User.countDocuments({ role: 'member', membershipStatus: 'pending' }),
+        User.aggregate([
+          {
+            $facet: {
+              counts: [
+                {
+                  $group: {
+                    _id: null,
+                    totalMembers: { $sum: { $cond: [{ $eq: ['$role', 'member'] }, 1, 0] } },
+                    activeMembers: {
+                      $sum: {
+                        $cond: [
+                          { $and: [{ $eq: ['$role', 'member'] }, { $eq: ['$membershipStatus', 'active'] }] },
+                          1,
+                          0,
+                        ],
+                      },
+                    },
+                    expiredMembers: {
+                      $sum: {
+                        $cond: [
+                          { $and: [{ $eq: ['$role', 'member'] }, { $eq: ['$membershipStatus', 'expired'] }] },
+                          1,
+                          0,
+                        ],
+                      },
+                    },
+                    pendingMembers: {
+                      $sum: {
+                        $cond: [
+                          { $and: [{ $eq: ['$role', 'member'] }, { $eq: ['$membershipStatus', 'pending'] }] },
+                          1,
+                          0,
+                        ],
+                      },
+                    },
+                    totalTrainers: { $sum: { $cond: [{ $eq: ['$role', 'trainer'] }, 1, 0] } },
+                    newMembers30d: {
+                      $sum: {
+                        $cond: [
+                          { $and: [{ $eq: ['$role', 'member'] }, { $gte: ['$createdAt', thirtyDaysAgo] }] },
+                          1,
+                          0,
+                        ],
+                      },
+                    },
+                    disabledMembers: {
+                      $sum: {
+                        $cond: [
+                          { $and: [{ $eq: ['$role', 'member'] }, { $eq: ['$isActive', false] }] },
+                          1,
+                          0,
+                        ],
+                      },
+                    },
+                    expiringIn7: {
+                      $sum: {
+                        $cond: [
+                          {
+                            $and: [
+                              { $eq: ['$role', 'member'] },
+                              { $gte: ['$membershipEnd', now] },
+                              { $lte: ['$membershipEnd', sevenDaysLater] },
+                            ],
+                          },
+                          1,
+                          0,
+                        ],
+                      },
+                    },
+                  },
+                },
+              ],
+              pendingFees: [
+                {
+                  $match: {
+                    role: 'member',
+                    membershipStatus: 'active',
+                    $or: [
+                      { feeDueAmount: { $gt: 0 } },
+                      { feePaid: false, feeDueAmount: { $in: [0, null] }, feeAmount: { $gt: 0 } },
+                    ],
+                  },
+                },
+                {
+                  $group: {
+                    _id: null,
+                    total: {
+                      $sum: { $cond: [{ $gt: ['$feeDueAmount', 0] }, '$feeDueAmount', '$feeAmount'] },
+                    },
+                    count: { $sum: 1 },
+                  },
+                },
+              ],
+            },
+          },
+        ]),
+        Order.aggregate([
+          { $match: { paymentStatus: 'paid' } },
+          {
+            $group: {
+              _id: null,
+              total: { $sum: '$totalAmount' },
+              monthly: {
+                $sum: {
+                  $cond: [{ $gte: ['$createdAt', thisMonthStart] }, '$totalAmount', 0],
+                },
+              },
+              lastMonth: {
+                $sum: {
+                  $cond: [
+                    {
+                      $and: [
+                        { $gte: ['$createdAt', lastMonthStart] },
+                        { $lt: ['$createdAt', thisMonthStart] },
+                      ],
+                    },
+                    '$totalAmount',
+                    0,
+                  ],
+                },
+              },
+            },
+          },
+        ]),
+        Payment.aggregate([
+          { $match: { source: 'membership' } },
+          {
+            $group: {
+              _id: null,
+              total: { $sum: '$amount' },
+              monthly: {
+                $sum: {
+                  $cond: [{ $gte: ['$createdAt', thisMonthStart] }, '$amount', 0],
+                },
+              },
+              lastMonth: {
+                $sum: {
+                  $cond: [
+                    {
+                      $and: [
+                        { $gte: ['$createdAt', lastMonthStart] },
+                        { $lt: ['$createdAt', thisMonthStart] },
+                      ],
+                    },
+                    '$amount',
+                    0,
+                  ],
+                },
+              },
+            },
+          },
+        ]),
         Order.countDocuments({}),
         Exercise.countDocuments({}),
         DietPlan.countDocuments({}),
-        User.countDocuments({ role: 'trainer' }),
-        Order.aggregate([
-          { $match: { paymentStatus: 'paid' } },
-          { $group: { _id: null, total: { $sum: '$totalAmount' } } },
-        ]),
-        Order.aggregate([
-          { $match: { paymentStatus: 'paid', createdAt: { $gte: thisMonthStart } } },
-          { $group: { _id: null, total: { $sum: '$totalAmount' } } },
-        ]),
-        Order.aggregate([
-          { $match: { paymentStatus: 'paid', createdAt: { $gte: lastMonthStart, $lt: thisMonthStart } } },
-          { $group: { _id: null, total: { $sum: '$totalAmount' } } },
-        ]),
-        User.countDocuments({ role: 'member', createdAt: { $gte: thirtyDaysAgo } }),
         Enquiry.countDocuments({ status: 'new' }),
-        User.countDocuments({ role: 'member', isActive: false }),
       ]);
 
-      const expiringIn7 = await User.countDocuments({
-        role: 'member',
-        membershipEnd: { $gte: now, $lte: new Date(now.getTime() + 7 * 86400000) },
-      });
+      const userCounts = userAgg[0]?.counts[0] || {};
+      const pendingFeeResult = userAgg[0]?.pendingFees[0] || {};
 
-      const storeRevenue          = revenueAgg[0]?.total          || 0;
-      const storeMonthlyRevenue   = monthlyRevenueAgg[0]?.total   || 0;
-      const storeLastMonthRevenue = lastMonthRevenueAgg[0]?.total || 0;
+      const totalMembers    = userCounts.totalMembers || 0;
+      const activeMembers   = userCounts.activeMembers || 0;
+      const expiredMembers  = userCounts.expiredMembers || 0;
+      const pendingMembers  = userCounts.pendingMembers || 0;
+      const totalTrainers   = userCounts.totalTrainers || 0;
+      const newMembers30d   = userCounts.newMembers30d || 0;
+      const disabledMembers = userCounts.disabledMembers || 0;
+      const expiringIn7     = userCounts.expiringIn7 || 0;
 
-      const [membershipFeeRevenue, membershipMonthAgg, membershipLastMonthAgg] = await Promise.all([
-        Payment.aggregate([
-          { $match: { source: 'membership' } },
-          { $group: { _id: null, total: { $sum: '$amount' } } },
-        ]),
-        Payment.aggregate([
-          { $match: { source: 'membership', createdAt: { $gte: thisMonthStart } } },
-          { $group: { _id: null, total: { $sum: '$amount' } } },
-        ]),
-        Payment.aggregate([
-          { $match: { source: 'membership', createdAt: { $gte: lastMonthStart, $lt: thisMonthStart } } },
-          { $group: { _id: null, total: { $sum: '$amount' } } },
-        ]),
-      ]);
+      const storeRevenue          = orderAgg[0]?.total     || 0;
+      const storeMonthlyRevenue   = orderAgg[0]?.monthly   || 0;
+      const storeLastMonthRevenue = orderAgg[0]?.lastMonth || 0;
 
-      const membershipRevenue          = membershipFeeRevenue[0]?.total     || 0;
-      const membershipMonthlyRevenue   = membershipMonthAgg[0]?.total       || 0;
-      const membershipLastMonthRevenue = membershipLastMonthAgg[0]?.total   || 0;
+      const membershipRevenue          = paymentAgg[0]?.total     || 0;
+      const membershipMonthlyRevenue   = paymentAgg[0]?.monthly   || 0;
+      const membershipLastMonthRevenue = paymentAgg[0]?.lastMonth || 0;
 
       const totalRevenue               = storeRevenue + membershipRevenue;
       const totalMonthlyRevenue        = storeMonthlyRevenue + membershipMonthlyRevenue;
       const totalLastMonthRevenue      = storeLastMonthRevenue + membershipLastMonthRevenue;
 
-      const pendingFeeResult = await User.aggregate([
-        { $match: { role: 'member', membershipStatus: 'active', $or: [
-          { feeDueAmount: { $gt: 0 } },
-          { feePaid: false, feeDueAmount: { $in: [0, null] }, feeAmount: { $gt: 0 } },
-        ] } },
-        { $group: { _id: null, total: { $sum: { $cond: [{ $gt: ['$feeDueAmount', 0] }, '$feeDueAmount', '$feeAmount'] } }, count: { $sum: 1 } } },
-      ]);
-      const pendingFees     = pendingFeeResult[0]?.total || 0;
-      const pendingFeeCount = pendingFeeResult[0]?.count || 0;
+      const pendingFees     = pendingFeeResult.total || 0;
+      const pendingFeeCount = pendingFeeResult.count || 0;
 
       return {
         totalMembers, activeMembers, expiredMembers, pendingMembers,
@@ -129,13 +251,31 @@ const getSummary = asyncHandler(async (req, res) => {
 // GET /api/analytics/trainer-summary
 const getTrainerSummary = asyncHandler(async (req, res) => {
   try {
-    const [totalMembers, activeMembers, totalExercises, totalDietPlans] = await Promise.all([
-      User.countDocuments({ role: 'member' }),
-      User.countDocuments({ role: 'member', membershipStatus: 'active' }),
-      Exercise.countDocuments({}),
-      DietPlan.countDocuments({}),
-    ]);
-    res.json({ totalMembers, activeMembers, totalExercises, totalDietPlans });
+    const data = await cache.getOrSet('analytics:trainer-summary', 30, async () => {
+      const [userCounts, totalExercises, totalDietPlans] = await Promise.all([
+        User.aggregate([
+          {
+            $match: { role: 'member' },
+          },
+          {
+            $group: {
+              _id: null,
+              totalMembers: { $sum: 1 },
+              activeMembers: {
+                $sum: { $cond: [{ $eq: ['$membershipStatus', 'active'] }, 1, 0] },
+              },
+            },
+          },
+        ]),
+        Exercise.countDocuments({}),
+        DietPlan.countDocuments({}),
+      ]);
+      const totalMembers = userCounts[0]?.totalMembers || 0;
+      const activeMembers = userCounts[0]?.activeMembers || 0;
+      return { totalMembers, activeMembers, totalExercises, totalDietPlans };
+    });
+    res.set('Cache-Control', 'no-store');
+    res.json(data);
   } catch (err) { sendDbError(res, err); }
 });
 
