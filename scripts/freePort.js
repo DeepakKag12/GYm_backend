@@ -34,14 +34,24 @@ function describe(pid) {
 
 try {
   if (process.platform === 'win32') {
-    // Windows has no cheap equivalent of lsof -d cwd, so report rather than kill.
     const line = sh('netstat -ano').split('\n')
       .find(l => l.includes(`:${port}`) && l.includes('LISTENING'));
     if (line) {
       const pid = line.trim().split(/\s+/).pop();
-      console.error(`\nPort ${port} is in use by pid ${pid}.`);
-      console.error(`Stop it, or start on another port:  set PORT=5001 && npm start\n`);
-      process.exit(1);
+      try {
+        const procInfo = sh(`tasklist /FI "PID eq ${pid}" /FO CSV /NH`);
+        if (procInfo.toLowerCase().includes('node.exe')) {
+          sh(`taskkill /F /PID ${pid}`);
+          console.log(`Freed port ${port} — stopped stale node process (pid ${pid})`);
+        } else {
+          console.error(`\nPort ${port} is in use by pid ${pid} (${procInfo}).`);
+          console.error(`Stop it, or start on another port:  set PORT=5001 && npm start\n`);
+          process.exit(1);
+        }
+      } catch (e) {
+        console.error(`Port ${port} in use by pid ${pid}.`);
+        process.exit(1);
+      }
     }
   } else {
     const pids = sh(`lsof -tiTCP:${port} -sTCP:LISTEN`).split('\n').filter(Boolean);
