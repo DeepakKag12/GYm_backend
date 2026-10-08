@@ -60,7 +60,7 @@ function isPlaceholder(v) {
 function whatsappStatus() {
   const token = process.env.META_WHATSAPP_TOKEN;
   const phoneId = process.env.META_PHONE_NUMBER_ID;
-  const templateName = process.env.META_WHATSAPP_TEMPLATE_NAME || 'fitnation_by_ajeet';
+  const templateName = process.env.META_WHATSAPP_TEMPLATE_NAME || 'fitnation_membership_alert';
 
   if (isPlaceholder(token)) {
     return { ok: false, reason: 'META_WHATSAPP_TOKEN missing or placeholder in .env' };
@@ -112,14 +112,14 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
  *
  * @param {string} recipientPhone  Destination phone number (e.g. '919589730151')
  * @param {string} customerName    Member's full name (fills {{1}})
- * @param {number|string} daysRemaining Days left in membership (fills {{2}})
- * @param {object} [opts]          Optional overrides
+ * @param {number|string} daysRemaining Days left in membership or status phrase (fills {{2}})
+ * @param {object} [opts]          Optional overrides (e.g. expiryDate fills {{3}})
  * @returns {Promise<{ok:boolean, channel:'whatsapp', messageId?:string, to?:string, error?:string}>}
  */
 async function sendGymReminder(recipientPhone, customerName, daysRemaining = 5, opts = {}) {
   const token = process.env.META_WHATSAPP_TOKEN;
   const phoneId = process.env.META_PHONE_NUMBER_ID;
-  const templateName = opts.templateName || process.env.META_WHATSAPP_TEMPLATE_NAME || 'fitnation_by_ajeet';
+  const templateName = opts.templateName || process.env.META_WHATSAPP_TEMPLATE_NAME || 'fitnation_membership_alert';
   const langCode = opts.languageCode || process.env.META_WHATSAPP_TEMPLATE_LANG || 'en';
 
   const status = whatsappStatus();
@@ -135,6 +135,34 @@ async function sendGymReminder(recipientPhone, customerName, daysRemaining = 5, 
 
   const url = `https://graph.facebook.com/${META_GRAPH_VERSION}/${phoneId}/messages`;
 
+  // Format {{2}} friendly string: "expires in X days", "expires today", or "expired X days ago"
+  let statusText = String(daysRemaining ?? '0');
+  if (typeof daysRemaining === 'number' || /^-?\d+$/.test(String(daysRemaining).trim())) {
+    const num = Number(daysRemaining);
+    if (num > 1) statusText = `expires in ${num} days`;
+    else if (num === 1) statusText = 'expires in 1 day';
+    else if (num === 0) statusText = 'expires today';
+    else if (num === -1) statusText = 'expired 1 day ago';
+    else statusText = `expired ${Math.abs(num)} days ago`;
+  }
+
+  // Format {{3}} expiration date
+  let dateText = opts.expiryDate || opts.endDate;
+  if (!dateText && opts.member?.membershipEnd) {
+    dateText = new Date(opts.member.membershipEnd).toLocaleDateString('en-IN', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+    });
+  }
+  if (!dateText) {
+    dateText = new Date().toLocaleDateString('en-IN', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+    });
+  }
+
   const payload = {
     messaging_product: 'whatsapp',
     to: formattedTo,
@@ -149,7 +177,8 @@ async function sendGymReminder(recipientPhone, customerName, daysRemaining = 5, 
           type: 'body',
           parameters: [
             { type: 'text', text: String(customerName || 'Athlete') },
-            { type: 'text', text: String(daysRemaining ?? '0') },
+            { type: 'text', text: String(statusText) },
+            { type: 'text', text: String(dateText) },
           ],
         },
       ],
@@ -301,7 +330,7 @@ async function sendWhatsApp(to, message, opts = {}) {
     (opts.daysRemaining !== undefined && !forceText)
   );
 
-  const templateName = opts.templateName || process.env.META_WHATSAPP_TEMPLATE_NAME || 'fitnation_by_ajeet';
+  const templateName = opts.templateName || process.env.META_WHATSAPP_TEMPLATE_NAME || 'fitnation_membership_alert';
   if (!forceText && isGymReminder && templateName) {
     const name = customerName || (opts.member?.name) || 'Athlete';
     const days = daysRemaining !== undefined ? daysRemaining : 5;
