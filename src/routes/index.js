@@ -1,0 +1,40 @@
+const express = require('express');
+const router = express.Router();
+
+const authRoutes = require('./auth.routes');
+const membersRoutes = require('./members.routes');
+const trainersRoutes = require('./trainers.routes');
+const plansRoutes = require('./plans.routes');
+const paymentsRoutes = require('./payments.routes');
+const splitsRoutes = require('./splits.routes');
+const dietRoutes = require('./diet.routes');
+const exercisesRoutes = require('./exercises.routes');
+const enquiriesRoutes = require('./enquiries.routes');
+const storeRoutes = require('./store.routes');
+const ordersRoutes = require('./orders.routes');
+const settingsRoutes = require('./settings.routes');
+const analyticsRoutes = require('./analytics.routes');
+const notificationsRoutes = require('./notifications.routes');
+const progressRoutes = require('./progress.routes');
+const transformationsRoutes = require('./transformations.routes');
+const cronRoutes = require('./cron.routes');
+
+router.use('/auth', authRoutes);
+router.use('/members', membersRoutes);
+router.use('/trainers', trainersRoutes);
+router.use('/plans', plansRoutes);
+router.use('/payments', paymentsRoutes);
+router.use('/splits', splitsRoutes);
+router.use('/diet', dietRoutes);
+router.use('/exercises', exercisesRoutes);
+router.use('/enquiries', enquiriesRoutes);
+router.use('/store', storeRoutes);
+router.use('/orders', ordersRoutes);
+router.use('/settings', settingsRoutes);
+router.use('/analytics', analyticsRoutes);
+router.use('/notifications', notificationsRoutes);
+router.use('/progress', progressRoutes);
+router.use('/transformations', transformationsRoutes);
+router.use('/cron', cronRoutes);
+
+module.exports = router;
