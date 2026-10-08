@@ -73,7 +73,7 @@ const allowedOrigins = [...new Set([
 ].map(s => s.trim().replace(/\/+$/, '')).filter(Boolean))];
 
 const isLocalOrigin = origin => /^https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\]|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|[a-z0-9-]+\.local)(?::\d+)?$/i.test(origin);
-const VERCEL_FRONTEND_PATTERN = /^https:\/\/(?:[a-z0-9-]+\.)*(?:gym-web|gym-frontend|fitnation|fitnessbyajeet)(?:-[a-z0-9-]+)?\.vercel\.app$/i;
+const VERCEL_FRONTEND_PATTERN = /^https:\/\/(?:[a-z0-9-]+\.)*(?:gym(?:-[a-z0-9-]+)*|fitnation|fitnessbyajeet)(?:-[a-z0-9-]+)?(?:\.vercel\.app|-deepak-kags-projects\.vercel\.app)$/i;
 
 function isOriginAllowed(origin) {
   if (!origin) return true;
