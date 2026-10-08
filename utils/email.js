@@ -54,9 +54,9 @@ function resolveEmailConfig() {
   };
 
   const chosen =
+    (!isPlaceholder(gmail.user)   && !isPlaceholder(gmail.pass)   && gmail) ||
     (!isPlaceholder(generic.host) && !isPlaceholder(generic.user) && !isPlaceholder(generic.pass) && generic) ||
     (!isPlaceholder(brevo.host)   && !isPlaceholder(brevo.user)   && !isPlaceholder(brevo.pass)   && brevo) ||
-    (!isPlaceholder(gmail.user)   && !isPlaceholder(gmail.pass)   && gmail) ||
     null;
 
   if (!chosen) return null;
