@@ -7,6 +7,7 @@
     "start": "node scripts/freePort.js && node server.js",
     "dev": "node scripts/freePort.js && nodemon server.js",
     "seed": "node seed.js",
+    "test": "node --test tests/**/*.test.js",
     "test:notify": "node scripts/testNotification.js"
   },
   "dependencies": {

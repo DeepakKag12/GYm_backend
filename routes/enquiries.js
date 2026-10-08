@@ -84,7 +84,20 @@ router.get('/', protect, adminOnly, async (req, res) => {
 // PUT /api/enquiries/:id - admin update status
 router.put('/:id', protect, adminOnly, async (req, res) => {
   try {
-    const enquiry = await Enquiry.findByIdAndUpdate(req.params.id, req.body, { new: true });
+    const { status, notes, interest } = req.body;
+    const allowedStatuses = ['new', 'contacted', 'converted', 'closed'];
+    const update = {};
+
+    if (status !== undefined) {
+      if (!allowedStatuses.includes(status)) {
+        return res.status(400).json({ message: `Invalid status. Must be one of: ${allowedStatuses.join(', ')}` });
+      }
+      update.status = status;
+    }
+    if (notes !== undefined) update.notes = String(notes).trim().slice(0, 3000);
+    if (interest !== undefined) update.interest = String(interest).trim();
+
+    const enquiry = await Enquiry.findByIdAndUpdate(req.params.id, update, { new: true, runValidators: true });
     if (!enquiry) return res.status(404).json({ message: 'Enquiry not found' });
     cache.del(ENQUIRIES_KEY);
     res.json(enquiry);

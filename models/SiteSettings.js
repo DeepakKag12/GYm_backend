@@ -34,6 +34,11 @@ const siteSettingsSchema = new mongoose.Schema({
     default: ['Mon–Sat: 5 AM – 11 AM', 'Mon–Sat: 4 PM – 10 PM', 'Sunday: Closed'],
   },
 
+  // Configurable landing page imagery (real gym & member photography)
+  heroWorkoutImage: { type: String, default: '', trim: true },
+  heroJoinImage:    { type: String, default: '', trim: true },
+  ctaBannerImage:   { type: String, default: '', trim: true },
+
   updatedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
 }, { timestamps: true });
 

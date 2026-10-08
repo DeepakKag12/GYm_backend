@@ -113,10 +113,16 @@ router.put('/update-credentials', protect, async (req, res) => {
     const match = await bcrypt.compare(currentPassword, user.password);
     if (!match) return res.status(400).json({ message: 'Current password is incorrect' });
 
-    if (newEmail && newEmail !== user.email) {
-      const exists = await User.findOne({ email: newEmail });
-      if (exists) return res.status(400).json({ message: 'Email already in use' });
-      user.email = newEmail;
+    if (newEmail) {
+      const normalizedEmail = String(newEmail).trim().toLowerCase();
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
+        return res.status(400).json({ message: 'Invalid email address format' });
+      }
+      if (normalizedEmail !== user.email) {
+        const exists = await User.findOne({ email: normalizedEmail });
+        if (exists) return res.status(400).json({ message: 'Email already in use' });
+        user.email = normalizedEmail;
+      }
     }
 
     if (newPassword) {
