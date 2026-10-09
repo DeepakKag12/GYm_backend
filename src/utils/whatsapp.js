@@ -322,75 +322,16 @@ async function sendWhatsApp(to, message, opts = {}) {
     }
   }
 
-  // 2. If this is explicitly a gym fee/expiration reminder (or template explicitly requested)
-  const isGymReminder = Boolean(
-    opts.isGymReminder ||
-    opts.useTemplate ||
-    opts.templateName ||
-    (opts.daysRemaining !== undefined && !forceText)
-  );
-
+  // 2. All WhatsApp notifications MUST be sent via Meta Cloud API Pre-Approved Template
+  // Meta Cloud API strictly rejects freeform text outside of 24h customer-care windows (Error 131047).
   const templateName = opts.templateName || process.env.META_WHATSAPP_TEMPLATE_NAME || 'fitnation_membership_alert';
-  if (!forceText && isGymReminder && templateName) {
-    const name = customerName || (opts.member?.name) || 'Athlete';
-    const days = daysRemaining !== undefined ? daysRemaining : 5;
-    const reminderResult = await sendGymReminder(formattedTo, name, days, opts);
-    if (reminderResult.ok) return reminderResult;
+  const name = customerName || (opts.member?.name) || 'Athlete';
+  const days = daysRemaining !== undefined ? daysRemaining : (opts.member?.membershipEnd ? 5 : 0);
 
-    // If template failed due to pending review or 24h issue, try freeform text fallback
-    console.warn(`⚠️  Template send failed, attempting freeform text fallback for ${formattedTo}...`);
-  }
-
-  // 3. Freeform text message
-  const textPayload = {
-    messaging_product: 'whatsapp',
-    to: formattedTo,
-    type: 'text',
-    text: {
-      preview_url: false,
-      body: message ? message.slice(0, 4096) : 'Notification from FitNation',
-    },
-  };
-
-  let lastErr;
-  for (let attempt = 0; attempt <= retries; attempt++) {
-    try {
-      const res = await axios.post(url, textPayload, {
-        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        timeout: 15000,
-      });
-      const msgId = res.data?.messages?.[0]?.id;
-      console.log(`✅ WhatsApp text sent to ${formattedTo} (${msgId})`);
-      return { ok: true, channel: 'whatsapp', messageId: msgId, to: formattedTo };
-    } catch (err) {
-      lastErr = err;
-      const status = err.response?.status;
-      if (attempt < retries && (status === 429 || status >= 500)) {
-        const wait = 500 * (attempt + 1);
-        console.warn(`↻ Meta WhatsApp retry ${attempt + 1}/${retries} in ${wait}ms...`);
-        await sleep(wait);
-        continue;
-      }
-      break;
-    }
-  }
-
-  const metaErr = lastErr?.response?.data?.error;
-  const code = metaErr?.code || lastErr?.code;
-  const msg = metaErr?.message || lastErr?.message;
-  const hint = explainMetaError(code, msg);
-
-  console.error(`❌ Meta WhatsApp failed for ${formattedTo}: [${code}] ${msg}`);
-  if (hint) console.error(`   ↳ ${hint}`);
-
-  return {
-    ok: false,
-    channel: 'whatsapp',
-    to: formattedTo,
-    code,
-    error: msg,
-    hint,
-  };
+  return await sendGymReminder(formattedTo, name, days, {
+    ...opts,
+    templateName,
+  });
 }
 
 /**

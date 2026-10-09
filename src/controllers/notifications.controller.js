@@ -69,9 +69,12 @@ const sendTestNotification = asyncHandler(async (req, res) => {
     const { results, delivered, failed } = await notifyMember(
       target,
       {
-        type: 'general',
+        type: 'fee-reminder',
         title: 'Test notification',
         message: `This is a test from your gym dashboard, sent at ${new Date().toLocaleString('en-IN')}. If you can read this on WhatsApp and in your inbox, both channels are live.`,
+        customerName: req.user.name || 'Admin',
+        daysRemaining: 5,
+        isGymReminder: true,
       },
       { channels: req.body.channels || ['whatsapp', 'email'], persist: false }
     );
@@ -109,8 +112,11 @@ const sendAdminNotification = asyncHandler(async (req, res) => {
           message,
           customerName: member.name,
           daysRemaining: left,
-          isGymReminder: type === 'fee-reminder' || type === 'membership-expired',
+          isGymReminder: true,
         }, { channels: picked });
+      if (delivered.includes('whatsapp')) {
+        await User.updateOne({ _id: member._id }, { $set: { lastWhatsAppAt: new Date() } });
+      }
       cache.del(ADMIN_FEED_KEY);
       return res.json({ ...(notification ? notification.toObject() : {}), delivered, failed, results });
     }
@@ -140,8 +146,6 @@ const sendAdminNotification = asyncHandler(async (req, res) => {
       return res.json({ message: 'No members match the selected audience filter.', sent: 0, count: 0 });
     }
 
-    const isGymReminder = type === 'fee-reminder' || type === 'membership-expired';
-
     const summary = await notifyMembers(
       members,
       member => {
@@ -155,7 +159,7 @@ const sendAdminNotification = asyncHandler(async (req, res) => {
           subject: `${title} — FitNation`,
           customerName: member.name,
           daysRemaining: left,
-          isGymReminder,
+          isGymReminder: true,
         };
       },
       {
@@ -163,11 +167,17 @@ const sendAdminNotification = asyncHandler(async (req, res) => {
         concurrency: Number(process.env.BROADCAST_CONCURRENCY || 8),
       }
     );
+
+    if (picked.includes('whatsapp')) {
+      const ids = members.map(m => m._id);
+      await User.updateMany({ _id: { $in: ids } }, { $set: { lastWhatsAppAt: new Date() } });
+    }
+
     cache.delPattern('notifs:member:');
     cache.del(ADMIN_FEED_KEY);
 
     res.json({
-      message: `Sent to ${summary.sent} member(s) — WhatsApp ${summary.whatsapp}, Email ${summary.email}`,
+      message: `Sent to ${summary.sent} member(s) — Meta WhatsApp: ${summary.whatsapp}, Email: ${summary.email}`,
       ...summary,
     });
   } catch (err) {

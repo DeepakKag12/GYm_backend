@@ -23,6 +23,7 @@
  *  - Bulk sends run with bounded concurrency so Meta API/SMTP aren't flooded.
  */
 const Notification = require('../models/Notification.model');
+const User = require('../models/User.model');
 const cache = require('../utils/cache');
 const { sendWhatsApp, whatsappStatus } = require('../utils/whatsapp');
 const { sendEmail, emailStatus } = require('../utils/email');
@@ -144,6 +145,12 @@ async function notifyMember(member, payload, opts = {}) {
 
   const delivered = Object.values(results).filter(r => r.ok).map(r => r.channel);
   const failed = Object.values(results).filter(r => !r.ok).map(r => r.channel);
+
+  if (delivered.includes('whatsapp') && member && member._id) {
+    User.updateOne({ _id: member._id }, { $set: { lastWhatsAppAt: new Date() } }).catch(e =>
+      console.warn(`Could not update lastWhatsAppAt for ${member._id}:`, e.message)
+    );
+  }
 
   // 3. Record what actually went out, so the admin can see per-channel status.
   if (notification) {

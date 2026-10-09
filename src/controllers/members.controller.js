@@ -14,6 +14,7 @@ const { notifyMember, notifyMembers } = require('../services/notify');
 const { findDuplicate } = require('../utils/duplicateUser');
 const { BRAND, SITE_URL } = require('../utils/emailTemplate');
 const { calcExpiry, daysRemaining } = require('../utils/dateUtils');
+const { canonicalPhone } = require('../utils/phone');
 
 function invalidateAnalytics() {
   cache.delPattern('analytics:');
@@ -136,11 +137,12 @@ const createMember = asyncHandler(async (req, res) => {
     }
     const dueAmount = Math.max(0, totalFee - requestedPayment);
 
+    const fallbackPassword = canonicalPhone(phone) || phone;
     const usedPhoneAsPassword = !password;
-    if (usedPhoneAsPassword && !phone) {
+    if (usedPhoneAsPassword && !fallbackPassword) {
       return res.status(400).json({ message: 'Provide a password, or a mobile number to use as one.' });
     }
-    const hashed = await bcrypt.hash(password || phone, 10);
+    const hashed = await bcrypt.hash(password || fallbackPassword, 10);
 
     const session = await mongoose.startSession();
     let member;
@@ -387,32 +389,44 @@ const updateMemberRole = asyncHandler(async (req, res) => {
 // POST /api/members/:id/reminder
 const sendIndividualReminder = asyncHandler(async (req, res) => {
   try {
-    const member = await User.findById(req.params.id).lean();
+    const member = await User.findById(req.params.id);
     if (!member) return res.status(404).json({ message: 'Member not found' });
 
-    const text = buildReminderText(member);
+    const { channels = ['whatsapp', 'email', 'website'], customMessage } = req.body || {};
+    const daysLeft = member.membershipEnd
+      ? (daysRemaining(member.membershipEnd, Date.now()) ?? 0)
+      : 0;
+
+    const text = customMessage || buildReminderText(member);
     const summary = await notifyMember(member, {
       type: 'fee-reminder',
-      title: 'Membership renewal reminder',
+      title: daysLeft <= 0 ? 'Membership expired' : 'Membership renewal reminder',
       subject: `Membership renewal reminder — ${BRAND}`,
       message: text,
+      customerName: member.name,
+      daysRemaining: daysLeft,
+      isGymReminder: true,
       ctaText: 'Renew now',
       ctaUrl: `${process.env.FRONTEND_URL || SITE_URL}/plans`,
-    });
+    }, { channels });
 
-    const whatsappUrl = whatsappLinkFor(member, text);
+    const delivered = summary?.delivered || [];
+    const failed = summary?.failed || [];
 
-    if (whatsappUrl) {
+    if (delivered.includes('whatsapp')) {
       await User.updateOne({ _id: member._id }, { $set: { lastWhatsAppAt: new Date() } });
       bustMembersCache();
     }
 
+    const channelLabels = delivered.map(c => (c === 'whatsapp' ? 'WhatsApp (Meta Template)' : c === 'email' ? 'Email' : 'In-App'));
+
     res.json({
-      message: `Reminder emailed to ${member.name}.`,
-      text,
-      whatsappUrl,
-      whatsappOpenedAt: whatsappUrl ? new Date() : null,
-      delivered: summary?.channels || summary || null,
+      message: channelLabels.length
+        ? `Reminder sent to ${member.name} via ${channelLabels.join(' & ')}.`
+        : 'Reminder saved in-app (external channels could not deliver).',
+      delivered,
+      failed,
+      results: summary?.results,
     });
   } catch (err) { sendDbError(res, err, 'Could not send this reminder.'); }
 });
@@ -435,6 +449,9 @@ const runRemindersSweep = asyncHandler(async (req, res) => {
         title: daysLeft === 0 ? 'Membership ends today' : `Membership ends in ${daysLeft} day(s)`,
         subject: `Your ${BRAND} membership expires ${daysLeft === 0 ? 'today' : `in ${daysLeft} day(s)`}`,
         message: `Dear ${member.name}, your ${BRAND} membership expires ${daysLeft === 0 ? 'today' : `in ${daysLeft} day(s)`} on ${new Date(member.membershipEnd).toLocaleDateString('en-IN')}. Renew now to keep training without a break.`,
+        customerName: member.name,
+        daysRemaining: daysLeft,
+        isGymReminder: true,
         ctaText: 'Renew membership',
         ctaUrl: `${process.env.FRONTEND_URL || SITE_URL}/plans`,
       };
@@ -450,7 +467,7 @@ const runRemindersSweep = asyncHandler(async (req, res) => {
 // POST /api/members/bulk-reminder
 const sendBulkReminder = asyncHandler(async (req, res) => {
   try {
-    const { days = 7, customMessage, channels } = req.body;
+    const { days = 7, customMessage, channels = ['whatsapp', 'email'] } = req.body;
     const now = new Date();
     const cutoff = new Date(now.getTime() + days * 86400000);
 
@@ -460,6 +477,10 @@ const sendBulkReminder = asyncHandler(async (req, res) => {
       membershipStatus: 'active',
       membershipEnd: { $gte: now, $lte: cutoff }
     }).lean();
+
+    if (!members.length) {
+      return res.json({ message: `No active members found expiring within ${days} days.`, sent: 0, count: 0 });
+    }
 
     const renewUrl = `${process.env.FRONTEND_URL || SITE_URL}/plans`;
     const summary = await notifyMembers(members, member => {
@@ -471,13 +492,22 @@ const sendBulkReminder = asyncHandler(async (req, res) => {
         title: daysLeft === 0 ? 'Membership ends today' : `Membership ends in ${daysLeft} day(s)`,
         subject: `Your ${BRAND} membership expires ${daysLeft === 0 ? 'today' : `in ${daysLeft} day(s)`}`,
         message: msg,
+        customerName: member.name,
+        daysRemaining: daysLeft,
+        isGymReminder: true,
         ctaText: 'Renew membership',
         ctaUrl: renewUrl,
       };
     }, { channels });
 
+    if (channels.includes('whatsapp')) {
+      const ids = members.map(m => m._id);
+      await User.updateMany({ _id: { $in: ids } }, { $set: { lastWhatsAppAt: new Date() } });
+      bustMembersCache();
+    }
+
     res.json({
-      message: `Reminder sent to ${summary.sent} member(s) — WhatsApp ${summary.whatsapp}, Email ${summary.email}`,
+      message: `Dispatched to ${summary.sent} member(s) — Meta WhatsApp: ${summary.whatsapp}, Email: ${summary.email}`,
       count: summary.sent,
       ...summary,
     });
