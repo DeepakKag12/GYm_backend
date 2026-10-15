@@ -137,7 +137,11 @@ const createProduct = asyncHandler(async (req, res) => {
 // PUT /api/store/:id
 const updateProduct = asyncHandler(async (req, res) => {
   try {
+    const existing = await Product.findById(req.params.id);
+    if (!existing) return res.status(404).json({ message: 'Product not found' });
+
     const update = { ...req.body };
+
     if (update.flavors !== undefined) update.flavors = safeArray(update.flavors);
     if (update.weights !== undefined) update.weights = safeArray(update.weights);
 
@@ -163,14 +167,17 @@ const updateProduct = asyncHandler(async (req, res) => {
         return res.status(400).json({ message: 'Price must be a valid non-negative number.' });
       }
     }
+    const effectivePrice = update.price !== undefined ? update.price : existing.price;
     if (update.discountPrice !== undefined && update.discountPrice !== '') {
       update.discountPrice = Number(update.discountPrice);
       if (Number.isNaN(update.discountPrice) || update.discountPrice < 0) {
         return res.status(400).json({ message: 'Discount price must be a valid non-negative number.' });
       }
-      if (update.price !== undefined && update.discountPrice > update.price) {
+      if (effectivePrice !== undefined && update.discountPrice > effectivePrice) {
         return res.status(400).json({ message: 'Discount price cannot exceed the original price.' });
       }
+    } else if (update.price !== undefined && existing.discountPrice && existing.discountPrice > update.price) {
+      return res.status(400).json({ message: 'Discount price cannot exceed the original price.' });
     }
     if (update.stock !== undefined && update.stock !== '') {
       update.stock = Number(update.stock);
