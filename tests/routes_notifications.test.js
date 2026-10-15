@@ -181,7 +181,14 @@ describe('Notifications Routes & Controller (/api/notifications)', () => {
   });
 
   test('7. Member 1 can mark their own notification as read', async () => {
-    const res = await fetch(`${baseUrl}/${notifMember1._id}/read`, {
+    const ownNotif = await Notification.create({
+      member: memberUser1._id,
+      type: 'general',
+      title: 'Own Notif To Read',
+      message: 'Testing mark read',
+      isRead: false,
+    });
+    const res = await fetch(`${baseUrl}/${ownNotif._id}/read`, {
       method: 'PUT',
       headers: { Authorization: `Bearer ${memberToken1}` },
     });
