@@ -47,7 +47,7 @@ const createTrainer = asyncHandler(async (req, res) => {
       password: hashed,
       role: 'trainer',
       specialization: specialization || '',
-      gender: gender || '',
+      gender: gender || undefined,
       isActive: isActive !== undefined ? isActive : true,
     });
     cache.del(TRAINERS_CACHE_KEY);
@@ -81,7 +81,7 @@ const updateTrainer = asyncHandler(async (req, res) => {
     if (email          !== undefined) update.email          = email;
     if (phone          !== undefined) update.phone          = phone;
     if (specialization !== undefined) update.specialization = specialization;
-    if (gender         !== undefined) update.gender         = gender;
+    if (gender         !== undefined) update.gender         = gender || undefined;
     if (isActive       !== undefined) update.isActive       = isActive;
     if (password) {
       update.password = await bcrypt.hash(password, 10);
@@ -102,8 +102,12 @@ const updateTrainer = asyncHandler(async (req, res) => {
 // DELETE /api/trainers/:id
 const deleteTrainer = asyncHandler(async (req, res) => {
   try {
-    const deleted = await User.findByIdAndDelete(req.params.id);
-    if (!deleted) return res.status(404).json({ message: 'Trainer not found' });
+    const target = await User.findById(req.params.id);
+    if (!target) return res.status(404).json({ message: 'Trainer not found' });
+    if (target.role !== 'trainer') {
+      return res.status(400).json({ message: 'Target user is not a trainer' });
+    }
+    await User.findByIdAndDelete(req.params.id);
     await User.updateMany({ assignedTrainer: req.params.id }, { $unset: { assignedTrainer: 1 } });
     cache.del(TRAINERS_CACHE_KEY);
     cache.del(MEMBERS_CACHE_KEY_MIRROR);

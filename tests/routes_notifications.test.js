@@ -82,13 +82,21 @@ describe('Notifications Routes & Controller (/api/notifications)', () => {
 
   // 1. GET /api/notifications (User's own notifications & IDOR check)
   test('1. Member can fetch their own notifications, Member 2 does not see Member 1 notifications', async () => {
+    const ownNotif = await Notification.create({
+      member: memberUser1._id,
+      type: 'announcement',
+      title: 'Welcome to FitNation Member 1',
+      message: 'Your fitness journey starts now!',
+      isRead: false,
+    });
+
     const res1 = await fetch(baseUrl, {
       headers: { Authorization: `Bearer ${memberToken1}` },
     });
     assert.equal(res1.status, 200);
     const list1 = await res1.json();
     assert.ok(Array.isArray(list1));
-    const found = list1.find((n) => n._id.toString() === notifMember1._id.toString());
+    const found = list1.find((n) => n._id.toString() === ownNotif._id.toString());
     assert.ok(found);
 
     const res2 = await fetch(baseUrl, {
@@ -97,7 +105,7 @@ describe('Notifications Routes & Controller (/api/notifications)', () => {
     assert.equal(res2.status, 200);
     const list2 = await res2.json();
     assert.ok(Array.isArray(list2));
-    const leak = list2.find((n) => n._id.toString() === notifMember1._id.toString());
+    const leak = list2.find((n) => n._id.toString() === ownNotif._id.toString());
     assert.equal(leak, undefined, 'IDOR: Member 2 must not see Member 1 notification');
   });
 

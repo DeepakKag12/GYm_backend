@@ -70,7 +70,7 @@ const getAllTransformations = asyncHandler(async (req, res) => {
 // POST /api/transformations
 const createTransformation = asyncHandler(async (req, res) => {
   try {
-    let beforeImage = '', afterImage = '', video = '';
+    let beforeImage = req.body.beforeImage || '', afterImage = req.body.afterImage || '', video = req.body.video || '';
     if (req.files?.beforeImage) {
       const r = await uploadMedia(req.files.beforeImage, 'transformations', 'image');
       beforeImage = r.secure_url;
@@ -103,9 +103,9 @@ const updateTransformation = asyncHandler(async (req, res) => {
     const t = await Transformation.findById(req.params.id);
     if (!t) return res.status(404).json({ message: 'Not found' });
 
-    let beforeImage = t.beforeImage;
-    let afterImage  = t.afterImage;
-    let video       = t.video || '';
+    let beforeImage = req.body.beforeImage || t.beforeImage;
+    let afterImage  = req.body.afterImage  || t.afterImage;
+    let video       = req.body.video       || t.video || '';
 
     if (req.files?.beforeImage) {
       const r = await uploadMedia(req.files.beforeImage, 'transformations', 'image');
