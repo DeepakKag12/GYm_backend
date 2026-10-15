@@ -100,6 +100,13 @@ const placeOrder = asyncHandler(async (req, res) => {
     cache.del(`orders:member:${req.user._id}`);
     cache.del('orders:admin');
     cache.delPattern('store:');
+
+    try {
+      const { emitToRole, emitToUser } = require('../socket');
+      emitToRole('admin', 'new_order', order);
+      emitToUser(req.user._id, 'new_order', order);
+    } catch (_) {}
+
     res.status(201).json(order);
   } catch (err) {
     sendDbError(res, err);
@@ -176,6 +183,13 @@ const updateOrderStatus = asyncHandler(async (req, res) => {
     cache.delPattern('analytics:');
     cache.del('orders:admin');
     if (order?.user) cache.del(`orders:member:${order.user}`);
+
+    try {
+      const { emitToRole, emitToUser } = require('../socket');
+      if (order?.user) emitToUser(order.user, 'order_status_updated', order);
+      emitToRole('admin', 'order_status_updated', order);
+    } catch (_) {}
+
     res.json(order);
   } catch (err) {
     sendDbError(res, err);

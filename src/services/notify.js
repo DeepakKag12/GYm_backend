@@ -163,6 +163,15 @@ async function notifyMember(member, payload, opts = {}) {
       console.error(`⚠️  Could not save delivery status for notification ${notification._id}: ${err.message}`)
     );
     cache.del(notifKey(member._id));
+
+    // Emit live notification over WebSockets
+    try {
+      const { emitToUser, emitToRole } = require('../socket');
+      emitToUser(member._id, 'notification', notification);
+      emitToRole('admin', 'admin_notification_feed', notification);
+    } catch (wsErr) {
+      // WS emission failure never throws
+    }
   }
 
   return { notification, results, delivered, failed };

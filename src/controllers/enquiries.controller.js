@@ -46,6 +46,11 @@ const createEnquiry = asyncHandler(async (req, res) => {
       ctaUrl: `${process.env.FRONTEND_URL || 'https://gym-web-ten-puce.vercel.app'}/admin/enquiries`,
     }).catch(err => console.error('⚠️  Enquiry alert failed:', err.message));
 
+    try {
+      const { emitToRole } = require('../socket');
+      emitToRole('admin', 'new_enquiry', enquiry);
+    } catch (_) {}
+
     res.status(201).json({ message: 'Thanks — we will get back to you soon.', enquiry });
   } catch (err) {
     console.error('Enquiry submission failed:', err.message);
