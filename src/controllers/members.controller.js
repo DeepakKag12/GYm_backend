@@ -78,6 +78,30 @@ const getRoster = asyncHandler(async (req, res) => {
 const getMembers = asyncHandler(async (req, res) => {
   try {
     const isAll = req.query.all === '1' || req.query.role === 'all';
+    const page = parseInt(req.query.page, 10);
+    const limit = parseInt(req.query.limit, 10);
+
+    if (!isNaN(page) && page > 0 && !isNaN(limit) && limit > 0) {
+      const boundedLimit = Math.min(limit, 200);
+      const skip = (page - 1) * boundedLimit;
+      const filter = isAll ? {} : { role: 'member' };
+      const [members, total] = await Promise.all([
+        User.find(filter)
+          .select('-password')
+          .populate('assignedTrainer', 'name phone')
+          .sort({ createdAt: -1 })
+          .skip(skip)
+          .limit(boundedLimit)
+          .lean(),
+        User.countDocuments(filter),
+      ]);
+      res.set('X-Total-Count', String(total));
+      res.set('X-Page', String(page));
+      res.set('X-Limit', String(boundedLimit));
+      res.set('Access-Control-Expose-Headers', 'X-Total-Count, X-Page, X-Limit');
+      return res.json(members);
+    }
+
     const cacheKey = isAll ? 'users:admin:all' : MEMBERS_CACHE_KEY;
     const members = await cache.getOrSet(cacheKey, 60, () =>
       User.find(isAll ? {} : { role: 'member' })

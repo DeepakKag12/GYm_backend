@@ -61,6 +61,27 @@ const createEnquiry = asyncHandler(async (req, res) => {
 // GET /api/enquiries - admin only
 const getAllEnquiries = asyncHandler(async (req, res) => {
   try {
+    const page = parseInt(req.query.page, 10);
+    const limit = parseInt(req.query.limit, 10);
+
+    if (!isNaN(page) && page > 0 && !isNaN(limit) && limit > 0) {
+      const boundedLimit = Math.min(limit, 200);
+      const skip = (page - 1) * boundedLimit;
+      const [enquiries, total] = await Promise.all([
+        Enquiry.find()
+          .sort({ createdAt: -1 })
+          .skip(skip)
+          .limit(boundedLimit)
+          .lean(),
+        Enquiry.countDocuments(),
+      ]);
+      res.set('X-Total-Count', String(total));
+      res.set('X-Page', String(page));
+      res.set('X-Limit', String(boundedLimit));
+      res.set('Access-Control-Expose-Headers', 'X-Total-Count, X-Page, X-Limit');
+      return res.json(enquiries);
+    }
+
     const enquiries = await cache.getOrSet(ENQUIRIES_KEY, 60, () =>
       Enquiry.find().sort({ createdAt: -1 }).lean()
     );

@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { protect, adminOnly } = require('../middlewares/auth.middleware');
+const { enquiryLimiter } = require('../middlewares/rateLimiter');
 const {
   createEnquiry,
   getAllEnquiries,
@@ -9,8 +10,8 @@ const {
   deleteEnquiry,
 } = require('../controllers/enquiries.controller');
 
-// Public lead submission
-router.post('/', createEnquiry);
+// Public lead submission (abuse protected)
+router.post('/', enquiryLimiter, createEnquiry);
 
 // Admin enquiry management
 router.get('/', protect, adminOnly, getAllEnquiries);

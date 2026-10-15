@@ -58,6 +58,21 @@ function initSocket(server) {
     transports: ['websocket', 'polling'],
   });
 
+  // Attach Redis adapter for horizontal multi-instance scaling if Redis is configured
+  try {
+    const { getRedisClient, isRedisReady } = require('./config/redis');
+    if (isRedisReady()) {
+      const { createAdapter } = require('@socket.io/redis-adapter');
+      const pubClient = getRedisClient();
+      const subClient = pubClient.duplicate();
+      subClient.on('error', () => {});
+      io.adapter(createAdapter(pubClient, subClient));
+      console.log('⚡ [Socket.IO] Redis adapter attached for multi-server scaling.');
+    }
+  } catch (err) {
+    console.warn('⚠️ [Socket.IO] Could not attach Redis adapter, using in-memory adapter:', err.message);
+  }
+
   // Socket Authentication Middleware
   io.use(async (socket, next) => {
     try {
@@ -80,8 +95,9 @@ function initSocket(server) {
       let user = cache.get(cacheKey);
 
       if (!user) {
-        user = await User.findById(targetUserId).select('-password').lean();
-        if (user) cache.set(cacheKey, user, 300);
+        user = await cache.getOrSet(cacheKey, 300, async () => {
+          return User.findById(targetUserId).select('-password').lean();
+        });
       }
 
       if (!user || user.isActive === false) {

@@ -2,7 +2,6 @@ const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
 const compression = require('compression');
-const rateLimit = require('express-rate-limit');
 const helmet = require('helmet');
 const fileUpload = require('express-fileupload');
 const path = require('path');
@@ -10,6 +9,7 @@ const { connectDB } = require('./config/db');
 const { enforceJwtSecret } = require('./utils/jwtSecret');
 const apiRoutes = require('./routes/index');
 const { errorHandler } = require('./middlewares/error.middleware');
+const { authLimiter, apiLimiter } = require('./middlewares/rateLimiter');
 
 const app = express();
 
@@ -31,24 +31,7 @@ app.use(compression({
   },
 }));
 
-// Rate Limiters
-const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 30,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: { message: 'Too many requests, please try again after 15 minutes.' },
-});
-
-const apiLimiter = rateLimit({
-  windowMs: 60 * 1000,
-  max: 200,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: { message: 'Too many requests, please slow down.' },
-});
-
-// Response-time header
+// Response-time header & in-code slow request logging (>1000ms)
 app.use((req, res, next) => {
   const start = process.hrtime.bigint();
   const writeHead = res.writeHead;
@@ -56,6 +39,9 @@ app.use((req, res, next) => {
     if (!res.headersSent) {
       const ms = Number(process.hrtime.bigint() - start) / 1e6;
       this.setHeader('X-Response-Time', `${ms.toFixed(1)}ms`);
+      if (ms > 1000 && req.originalUrl !== '/api/health') {
+        console.warn(`⚠️ [Slow Request] ${req.method} ${req.originalUrl} took ${ms.toFixed(1)}ms`);
+      }
     }
     return writeHead.apply(this, args);
   };
@@ -134,6 +120,7 @@ app.get('/api/health', async (req, res) => {
     status: ok ? 'ok' : 'degraded',
     db: STATE[mongoose.connection.readyState] || 'unknown',
     mongoUriSet: Boolean(process.env.MONGO_URI),
+    redis: require('./config/redis').getRedisStatus(),
     tookMs: Date.now() - started,
     error,
   });

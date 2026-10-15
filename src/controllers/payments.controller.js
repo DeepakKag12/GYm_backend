@@ -132,6 +132,9 @@ const streamMemberStatement = asyncHandler(async (req, res) => {
   try {
     const member = await User.findOne({ _id: req.params.memberId, role: 'member' }).select('-password').lean();
     if (!member) return res.status(404).json({ message: 'Member not found.' });
+    if (req.user.role !== 'admin' && String(member._id) !== String(req.user._id)) {
+      return res.status(403).json({ message: 'Access denied: You cannot view this statement.' });
+    }
     const payments = await Payment.find({ member: member._id, source: 'membership' })
       .select('amount method kind createdAt periodStart periodEnd note')
       .sort({ createdAt: 1 })
@@ -158,6 +161,9 @@ const streamPaymentReceipt = asyncHandler(async (req, res) => {
       .populate('member', 'name email phone membershipPlan membershipStart membershipEnd feeAmount feeDueAmount feePaid')
       .lean();
     if (!payment) return res.status(404).json({ message: 'Payment not found.' });
+    if (req.user.role !== 'admin' && String(payment.member?._id || payment.member) !== String(req.user._id)) {
+      return res.status(403).json({ message: 'Access denied: You cannot view this receipt.' });
+    }
     const settings = await SiteSettings.getSettings().catch(() => null);
     const pdf = await buildPaymentReceipt(payment, payment.member, settings);
     const filename = `receipt-${(payment.member?.name || 'member').replace(/[^a-z0-9]/gi, '-')}-${payment._id.toString().slice(-6)}.pdf`;

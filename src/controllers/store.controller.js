@@ -1,11 +1,20 @@
+const path = require('path');
 const Product = require('../models/Product.model');
 const cloudinary = require('../config/cloudinary');
 const cache = require('../utils/cache');
 const asyncHandler = require('../utils/asyncHandler');
 const { sendDbError } = require('../utils/dbError');
 
+const ALLOWED_IMAGE_EXTS = ['.jpg', '.jpeg', '.png', '.webp', '.svg', '.gif'];
+
 /** Upload to Cloudinary — buffer-safe (Vercel) + auto image compression */
 async function uploadImage(file, folder = 'store') {
+  if (file && file.name) {
+    const ext = path.extname(file.name).toLowerCase();
+    if (!ALLOWED_IMAGE_EXTS.includes(ext)) {
+      throw new Error('Only image files (.jpg, .jpeg, .png, .webp, .svg, .gif) are allowed');
+    }
+  }
   const cfg = cloudinary.config();
   if (!cfg.cloud_name || !cfg.api_key || !cfg.api_secret) {
     throw new Error(
@@ -45,7 +54,10 @@ const getProducts = asyncHandler(async (req, res) => {
       let query = showAll ? {} : { isActive: true };
       if (category) query.category = category;
       if (featured) query.isFeatured = true;
-      if (search) query.name = { $regex: search, $options: 'i' };
+      if (search && typeof search === 'string') {
+        const safeSearch = search.trim().slice(0, 80).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        if (safeSearch) query.name = { $regex: safeSearch, $options: 'i' };
+      }
       return Product.find(query).sort({ createdAt: -1 }).lean();
     });
     res.json(products);

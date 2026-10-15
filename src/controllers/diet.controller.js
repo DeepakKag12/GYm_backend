@@ -1,3 +1,4 @@
+const path = require('path');
 const jwt = require('jsonwebtoken');
 const DietPlan = require('../models/DietPlan.model');
 const User = require('../models/User.model');
@@ -6,8 +7,16 @@ const cache = require('../utils/cache');
 const asyncHandler = require('../utils/asyncHandler');
 const { sendDbError } = require('../utils/dbError');
 
+const ALLOWED_IMAGE_EXTS = ['.jpg', '.jpeg', '.png', '.webp', '.svg', '.gif'];
+
 /** Upload to Cloudinary — buffer-safe (Vercel) + auto image compression */
 async function uploadImage(file, folder = 'diet') {
+  if (file && file.name) {
+    const ext = path.extname(file.name).toLowerCase();
+    if (!ALLOWED_IMAGE_EXTS.includes(ext)) {
+      throw new Error('Only image files (.jpg, .jpeg, .png, .webp, .svg, .gif) are allowed');
+    }
+  }
   const cfg = cloudinary.config();
   if (!cfg.cloud_name || !cfg.api_key || !cfg.api_secret) {
     throw new Error(

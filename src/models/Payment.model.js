@@ -57,5 +57,6 @@ const paymentSchema = new mongoose.Schema({
 // Reports group by month and by source; the list is newest-first.
 paymentSchema.index({ createdAt: -1 });
 paymentSchema.index({ source: 1, createdAt: -1 });
+paymentSchema.index({ member: 1, createdAt: -1 });
 
 module.exports = mongoose.model('Payment', paymentSchema);

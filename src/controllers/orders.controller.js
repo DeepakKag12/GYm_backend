@@ -129,6 +129,28 @@ const getMyOrders = asyncHandler(async (req, res) => {
 // GET /api/orders - Admin: all orders
 const getAllOrders = asyncHandler(async (req, res) => {
   try {
+    const page = parseInt(req.query.page, 10);
+    const limit = parseInt(req.query.limit, 10);
+
+    if (!isNaN(page) && page > 0 && !isNaN(limit) && limit > 0) {
+      const boundedLimit = Math.min(limit, 200);
+      const skip = (page - 1) * boundedLimit;
+      const [orders, total] = await Promise.all([
+        Order.find()
+          .populate('user', 'name email phone')
+          .sort({ createdAt: -1 })
+          .skip(skip)
+          .limit(boundedLimit)
+          .lean(),
+        Order.countDocuments(),
+      ]);
+      res.set('X-Total-Count', String(total));
+      res.set('X-Page', String(page));
+      res.set('X-Limit', String(boundedLimit));
+      res.set('Access-Control-Expose-Headers', 'X-Total-Count, X-Page, X-Limit');
+      return res.json(orders);
+    }
+
     const orders = await cache.getOrSet('orders:admin', 60, () =>
       Order.find().populate('user', 'name email phone').sort({ createdAt: -1 }).lean()
     );

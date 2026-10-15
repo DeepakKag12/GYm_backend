@@ -22,8 +22,9 @@ const protect = async (req, res, next) => {
     const cacheKey = `user:${decoded.id}`;
     let user = cache.get(cacheKey);
     if (!user) {
-      user = await User.findById(decoded.id).select('-password').lean();
-      if (user) cache.set(cacheKey, user, USER_CACHE_TTL);
+      user = await cache.getOrSet(cacheKey, USER_CACHE_TTL, async () => {
+        return User.findById(decoded.id).select('-password').lean();
+      });
     }
     if (!user) return res.status(401).json({ message: 'User not found' });
     if (user.isActive === false) {

@@ -1,10 +1,23 @@
+const path = require('path');
 const Transformation = require('../models/Transformation.model');
 const cloudinary = require('../config/cloudinary');
 const cache = require('../utils/cache');
 const { sendDbError } = require('../utils/dbError');
 const { asyncHandler } = require('../utils/asyncHandler');
 
+const ALLOWED_IMAGE_EXTS = ['.jpg', '.jpeg', '.png', '.webp', '.svg', '.gif'];
+const ALLOWED_VIDEO_EXTS = ['.mp4', '.webm', '.mov', '.mkv'];
+
 async function uploadMedia(file, folder = 'transformations', resourceType = 'image') {
+  if (file && file.name) {
+    const ext = path.extname(file.name).toLowerCase();
+    if (resourceType === 'image' && !ALLOWED_IMAGE_EXTS.includes(ext)) {
+      throw new Error('Only image files (.jpg, .jpeg, .png, .webp, .svg, .gif) are allowed');
+    }
+    if (resourceType === 'video' && !ALLOWED_VIDEO_EXTS.includes(ext)) {
+      throw new Error('Only video files (.mp4, .webm, .mov, .mkv) are allowed');
+    }
+  }
   const cfg = cloudinary.config();
   if (!cfg.cloud_name || !cfg.api_key || !cfg.api_secret) {
     throw new Error(
