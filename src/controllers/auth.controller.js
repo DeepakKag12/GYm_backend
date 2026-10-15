@@ -5,6 +5,8 @@ const cache = require('../utils/cache');
 const { sendDbError } = require('../utils/dbError');
 const { asyncHandler } = require('../utils/asyncHandler');
 
+const { canonicalPhone } = require('../utils/phone');
+
 const signToken = (id) => jwt.sign({ id }, process.env.JWT_SECRET, { expiresIn: '30d' });
 
 // POST /api/auth/register
@@ -39,14 +41,14 @@ const login = asyncHandler(async (req, res) => {
       return res.status(400).json({ message: 'Email and password are required' });
     }
     const identifier = String(email || '').trim();
-    const digitsOnly = identifier.replace(/\D/g, '');
+    const canonPhone = canonicalPhone(identifier);
     let user;
-    if (digitsOnly.length === 10) {
+    if (canonPhone && canonPhone.length === 10) {
       user = await User.findOne({
         $or: [
-          { phone: digitsOnly },
-          { phone: `+91${digitsOnly}` },
-          { phone: `91${digitsOnly}` },
+          { phone: canonPhone },
+          { phone: `+91${canonPhone}` },
+          { phone: `91${canonPhone}` },
           { email: identifier.toLowerCase() },
         ],
       });
