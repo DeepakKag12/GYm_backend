@@ -103,6 +103,19 @@ app.get('/', (req, res) => {
   res.json({ status: 'ok', message: 'FitnessByAjeet API is running' });
 });
 
+// Gracefully support clients calling endpoints without the /api prefix (e.g. /exercises -> /api/exercises)
+app.use((req, res, next) => {
+  if (
+    !req.url.startsWith('/api') &&
+    !req.url.startsWith('/uploads') &&
+    req.path !== '/' &&
+    req.path !== '/favicon.ico'
+  ) {
+    req.url = '/api' + (req.url.startsWith('/') ? req.url : '/' + req.url);
+  }
+  next();
+});
+
 // Cache stats endpoint
 app.get('/api/_cache/stats', (req, res) => {
   res.set('Cache-Control', 'no-store');
