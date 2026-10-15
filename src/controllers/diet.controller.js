@@ -170,8 +170,7 @@ const deleteDietPlan = asyncHandler(async (req, res) => {
   try {
     await DietPlan.findByIdAndDelete(req.params.id);
     cache.del(`diet:item:${req.params.id}`);
-    cache.delPattern('diet:public');
-    cache.delPattern('diet:staff');
+    cache.delPattern('diet:');
     res.json({ message: 'Diet plan deleted' });
   } catch (err) {
     sendDbError(res, err);
