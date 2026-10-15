@@ -22,7 +22,8 @@ const createEnquiry = asyncHandler(async (req, res) => {
 
     if (!name)    return res.status(400).json({ message: 'Please tell us your name.', field: 'name' });
     if (!phone)   return res.status(400).json({ message: 'Please leave a phone number so we can reply.', field: 'phone' });
-    if (!/^\d{10}$/.test(phone.replace(/\D/g, ''))) {
+    const canonPhone = canonicalPhone(phone);
+    if (!canonPhone) {
       return res.status(400).json({ message: 'Enter a 10-digit mobile number.', field: 'phone' });
     }
     if (!message) return res.status(400).json({ message: 'Tell us what you would like to know.', field: 'message' });
@@ -32,7 +33,7 @@ const createEnquiry = asyncHandler(async (req, res) => {
 
     const enquiry = await Enquiry.create({
       name,
-      phone: canonicalPhone(phone),
+      phone: canonPhone,
       message: message.slice(0, 2000),
       email: email || undefined,
       interest: VALID_INTEREST.includes(interest) ? interest : 'general',
