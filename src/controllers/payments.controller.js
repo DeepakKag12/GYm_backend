@@ -280,22 +280,54 @@ const recordPayment = asyncHandler(async (req, res) => {
 
     const memberDoc = await User.findOne({ _id: member, role: 'member' });
     if (!memberDoc) return res.status(404).json({ message: 'Member not found.' });
+
+    const idempotencyKey = typeof req.body.idempotencyKey === 'string'
+      ? req.body.idempotencyKey.trim().slice(0, 100)
+      : (typeof req.headers['idempotency-key'] === 'string' ? req.headers['idempotency-key'].trim().slice(0, 100) : undefined);
+
+    if (idempotencyKey) {
+      const existing = await Payment.findOne({ idempotencyKey, member: memberDoc._id });
+      if (existing) {
+        return res.status(200).json({
+          message: 'Payment already recorded.',
+          payment: existing,
+          remaining: memberDoc.feeDueAmount,
+        });
+      }
+    }
+
     const currentDue = memberDoc.feeDueAmount > 0 ? memberDoc.feeDueAmount : (memberDoc.feePaid ? 0 : memberDoc.feeAmount);
     if (currentDue > 0 && payNum > currentDue) {
       return res.status(400).json({ message: `Payment cannot be greater than the remaining due amount of ₹${currentDue}.` });
     }
 
-    const payment = await Payment.create({
-      member,
-      source: 'membership',
-      kind: ['new-membership', 'renewal', 'adjustment'].includes(kind) ? kind : 'adjustment',
-      amount: payNum,
-      method: method || 'cash',
-      note,
-      periodStart: memberDoc.membershipStart,
-      periodEnd: memberDoc.membershipEnd,
-      recordedBy: req.user._id,
-    });
+    let payment;
+    try {
+      payment = await Payment.create({
+        member,
+        source: 'membership',
+        kind: ['new-membership', 'renewal', 'adjustment'].includes(kind) ? kind : 'adjustment',
+        amount: payNum,
+        method: method || 'cash',
+        note,
+        periodStart: memberDoc.membershipStart,
+        periodEnd: memberDoc.membershipEnd,
+        recordedBy: req.user._id,
+        ...(idempotencyKey ? { idempotencyKey } : {}),
+      });
+    } catch (createErr) {
+      if (createErr?.code === 11000 && idempotencyKey) {
+        const existing = await Payment.findOne({ idempotencyKey, member: memberDoc._id });
+        if (existing) {
+          return res.status(200).json({
+            message: 'Payment already recorded.',
+            payment: existing,
+            remaining: memberDoc.feeDueAmount,
+          });
+        }
+      }
+      throw createErr;
+    }
 
     const remaining = Math.max(0, currentDue - payNum);
     const updateFields = { feeDueAmount: remaining, feePaid: remaining === 0 };

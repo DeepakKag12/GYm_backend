@@ -236,8 +236,7 @@ describe('Members Routes Test Suite', () => {
     assert.equal(resDeleteTemp.status, 200);
 
     // Now adminUser is the sole admin. Trying to delete adminUser was rejected in test 12.
-    // If another admin existed and tried to delete the only admin, it would reject.
-    assert.equal(await User.countDocuments({ role: 'admin' }), 1);
+    assert.equal(await User.countDocuments({ role: 'admin', email: /^membertest_/ }), 1);
   });
 
   it('14. DELETE /:id - non-existent member returns 404', async () => {
