@@ -329,7 +329,7 @@ const recordPayment = asyncHandler(async (req, res) => {
       throw createErr;
     }
 
-    const remaining = Math.max(0, currentDue - payNum);
+    const remaining = Math.max(0, Math.round((currentDue - payNum) * 100) / 100);
     const updateFields = { feeDueAmount: remaining, feePaid: remaining === 0 };
     if (!memberDoc.feeAmount || Number(memberDoc.feeAmount) < payNum) {
       updateFields.feeAmount = payNum;
@@ -386,7 +386,7 @@ const addDuePayment = asyncHandler(async (req, res) => {
       });
     }
 
-    const remaining = Math.max(0, totalAmount - paid);
+    const remaining = Math.max(0, Math.round((totalAmount - paid) * 100) / 100);
     memberDoc.feeAmount = Math.max(Number(memberDoc.feeAmount || 0), totalAmount);
     memberDoc.feeDueAmount = remaining;
     memberDoc.feePaid = remaining === 0;

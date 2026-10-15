@@ -159,7 +159,7 @@ const createMember = asyncHandler(async (req, res) => {
     if (requestedPayment > totalFee) {
       return res.status(400).json({ message: 'Initial payment cannot be greater than the fee amount.' });
     }
-    const dueAmount = Math.max(0, totalFee - requestedPayment);
+    const dueAmount = Math.max(0, Math.round((totalFee - requestedPayment) * 100) / 100);
 
     const fallbackPassword = canonicalPhone(phone) || phone;
     const usedPhoneAsPassword = !password;
@@ -273,7 +273,7 @@ const updateMember = asyncHandler(async (req, res) => {
       if (renewalPayment > renewalFee) {
         return res.status(400).json({ message: 'Payment cannot be greater than the renewal fee.' });
       }
-      update.feeDueAmount = Math.max(0, renewalFee - renewalPayment);
+      update.feeDueAmount = Math.max(0, Math.round((renewalFee - renewalPayment) * 100) / 100);
       update.feePaid = update.feeDueAmount === 0;
 
       const endsInFuture = new Date(update.membershipEnd) > new Date();
