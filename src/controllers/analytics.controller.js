@@ -14,11 +14,11 @@ const cache = require('../utils/cache');
 const asyncHandler = require('../utils/asyncHandler');
 const { sendDbError } = require('../utils/dbError');
 
-function monthStart(offsetFromNow = 0) {
-  const d = new Date();
-  d.setMonth(d.getMonth() + offsetFromNow);
+function monthStart(offsetFromNow = 0, referenceDate = new Date()) {
+  const d = new Date(referenceDate);
   d.setDate(1);
   d.setHours(0, 0, 0, 0);
+  d.setMonth(d.getMonth() + offsetFromNow);
   return d;
 }
 
@@ -619,4 +619,5 @@ module.exports = {
   getRevenueFull,
   resetToProduction,
   resetAnalytics,
+  monthStart,
 };
