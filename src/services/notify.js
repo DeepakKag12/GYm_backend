@@ -102,8 +102,7 @@ async function notifyMember(member, payload, opts = {}) {
     cache.del(ADMIN_FEED_KEY);
   }
 
-  // 2. WhatsApp + email fire together; neither waits on the other.
-  const tasks = [];
+  const taskList = [];
   if (channels.has('whatsapp')) {
     const to = member.whatsapp || member.phone;
     const daysLeft = payload.daysRemaining !== undefined ? payload.daysRemaining : (
@@ -111,37 +110,43 @@ async function notifyMember(member, payload, opts = {}) {
         ? (calcDaysRemaining(member.membershipEnd, new Date()) ?? 0)
         : 0
     );
-    tasks.push(
-      sendWhatsApp(to, buildWhatsAppBody({ title, message, ctaText, ctaUrl }), {
-        customerName: payload.customerName || member.name || 'Athlete',
-        daysRemaining: daysLeft,
-        isGymReminder: payload.isGymReminder || type === 'fee-reminder' || type === 'membership-expired',
-        member,
-      })
-    );
+    taskList.push({
+      channel: 'whatsapp',
+      promise: Promise.resolve().then(() =>
+        whatsapp.sendWhatsApp(to, buildWhatsAppBody({ title, message, ctaText, ctaUrl }), {
+          customerName: payload.customerName || member.name || 'Athlete',
+          daysRemaining: daysLeft,
+          isGymReminder: payload.isGymReminder || type === 'fee-reminder' || type === 'membership-expired',
+          member,
+        })
+      ),
+    });
   }
   if (channels.has('email')) {
-    tasks.push(
-      sendEmail(member.email, subject || title, {
-        title,
-        text: message,
-        html: html || renderEmail({ title, message, ctaText, ctaUrl }),
-        ctaText,
-        ctaUrl,
-      })
-    );
+    taskList.push({
+      channel: 'email',
+      promise: Promise.resolve().then(() =>
+        email.sendEmail(member.email, subject || title, {
+          title,
+          text: message,
+          html: html || renderEmail({ title, message, ctaText, ctaUrl }),
+          ctaText,
+          ctaUrl,
+        })
+      ),
+    });
   }
 
-  const settled = await Promise.allSettled(tasks);
+  const settled = await Promise.allSettled(taskList.map(t => t.promise));
   const results = {};
-  for (const s of settled) {
-    // A rejected promise means a bug in the sender, not a delivery failure —
-    // the senders are written to resolve with { ok:false } instead of throwing.
-    const r = s.status === 'fulfilled'
-      ? s.value
-      : { ok: false, channel: 'unknown', error: s.reason && s.reason.message };
-    results[r.channel] = r;
-  }
+  settled.forEach((s, idx) => {
+    const ch = taskList[idx].channel;
+    if (s.status === 'fulfilled') {
+      results[ch] = { channel: ch, ...(s.value || {}) };
+    } else {
+      results[ch] = { ok: false, channel: ch, error: s.reason?.message || String(s.reason) };
+    }
+  });
 
   const delivered = Object.values(results).filter(r => r.ok).map(r => r.channel);
   const failed = Object.values(results).filter(r => !r.ok).map(r => r.channel);
