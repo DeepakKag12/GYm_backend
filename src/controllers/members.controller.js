@@ -341,8 +341,21 @@ const updateMember = asyncHandler(async (req, res) => {
 // DELETE /api/members/:id
 const deleteMember = asyncHandler(async (req, res) => {
   try {
+    if (req.user._id.toString() === req.params.id) {
+      return res.status(400).json({ message: 'You cannot delete your own account.' });
+    }
+
+    const targetUser = await User.findById(req.params.id);
+    if (!targetUser) return res.status(404).json({ message: 'Member not found' });
+
+    if (targetUser.role === 'admin') {
+      const admins = await User.countDocuments({ role: 'admin' });
+      if (admins <= 1) {
+        return res.status(400).json({ message: 'This is the only admin. Promote someone else first.' });
+      }
+    }
+
     const deleted = await User.findByIdAndDelete(req.params.id);
-    if (!deleted) return res.status(404).json({ message: 'Member not found' });
 
     const id = req.params.id;
     const [notifs, progress, planners] = await Promise.all([

@@ -52,6 +52,23 @@ cloudinary.uploader.destroy = async function mockDestroy(publicId, opts = {}) {
 };
 
 // Database Connection Helper
+const origStartSession = mongoose.startSession.bind(mongoose);
+mongoose.startSession = async function (...args) {
+  const session = await origStartSession(...args);
+  const origWithTransaction = session.withTransaction.bind(session);
+  session.withTransaction = async function (fn) {
+    try {
+      return await origWithTransaction(fn);
+    } catch (err) {
+      if (err?.message && err.message.includes('Transaction numbers are only allowed on a replica set member or mongos')) {
+        return await fn();
+      }
+      throw err;
+    }
+  };
+  return session;
+};
+
 async function setupTestDb() {
   if (mongoose.connection.readyState !== 1) {
     await mongoose.connect(process.env.MONGO_URI, {
@@ -61,7 +78,16 @@ async function setupTestDb() {
 }
 
 async function teardownTestDb() {
-  // Keep connection open or clean collections
+  try {
+    if (mongoose.connection.client) {
+      await mongoose.connection.client.close(true).catch(() => {});
+    }
+    await mongoose.disconnect().catch(() => {});
+  } finally {
+    for (const h of process._getActiveHandles()) {
+      if (typeof h.unref === 'function') h.unref();
+    }
+  }
 }
 
 async function cleanCollections(...modelNames) {

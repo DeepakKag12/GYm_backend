@@ -2,7 +2,7 @@ const { describe, it, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('http');
 const mongoose = require('mongoose');
-const { setupTestDb, cleanCollections, makeToken } = require('./test_helper');
+const { setupTestDb, teardownTestDb, makeToken } = require('./test_helper');
 const app = require('../src/app');
 const User = require('../src/models/User.model');
 
@@ -12,7 +12,7 @@ describe('Auth Routes Test Suite', () => {
 
   before(async () => {
     await setupTestDb();
-    await cleanCollections('User');
+    await User.deleteMany({ email: /^authtest_/ });
     server = http.createServer(app);
     await new Promise((resolve) => {
       server.listen(0, '127.0.0.1', () => {
@@ -23,9 +23,10 @@ describe('Auth Routes Test Suite', () => {
   });
 
   after(async () => {
-    await cleanCollections('User');
+    await User.deleteMany({ email: /^authtest_/ });
+    if (server?.closeAllConnections) server.closeAllConnections();
     await new Promise((resolve) => server.close(resolve));
-    await mongoose.disconnect();
+    await teardownTestDb();
   });
 
   it('1. POST /register - successfully registers a new member', async () => {
@@ -33,16 +34,16 @@ describe('Auth Routes Test Suite', () => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        name: 'Test Member',
-        email: 'testmember@example.com',
-        phone: '9876543210',
+        name: 'Auth Test Member',
+        email: 'authtest_member@example.com',
+        phone: '9811111110',
         password: 'password123',
       }),
     });
     assert.equal(res.status, 201);
     const data = await res.json();
     assert.ok(data.token);
-    assert.equal(data.user.email, 'testmember@example.com');
+    assert.equal(data.user.email, 'authtest_member@example.com');
     assert.equal(data.user.password, undefined);
   });
 
@@ -61,8 +62,8 @@ describe('Auth Routes Test Suite', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         name: 'Short Pass',
-        email: 'shortpass@example.com',
-        phone: '9876543211',
+        email: 'authtest_shortpass@example.com',
+        phone: '9811111111',
         password: '123',
       }),
     });
@@ -75,8 +76,8 @@ describe('Auth Routes Test Suite', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         name: 'Duplicate Email',
-        email: 'testmember@example.com',
-        phone: '9876543212',
+        email: 'authtest_member@example.com',
+        phone: '9811111112',
         password: 'password123',
       }),
     });
@@ -88,14 +89,14 @@ describe('Auth Routes Test Suite', () => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        email: 'testmember@example.com',
+        email: 'authtest_member@example.com',
         password: 'password123',
       }),
     });
     assert.equal(res.status, 200);
     const data = await res.json();
     assert.ok(data.token);
-    assert.equal(data.user.email, 'testmember@example.com');
+    assert.equal(data.user.email, 'authtest_member@example.com');
   });
 
   it('6. POST /login - succeeds with 10-digit phone', async () => {
@@ -103,7 +104,7 @@ describe('Auth Routes Test Suite', () => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        email: '9876543210',
+        email: '9811111110',
         password: 'password123',
       }),
     });
@@ -112,12 +113,12 @@ describe('Auth Routes Test Suite', () => {
     assert.ok(data.token);
   });
 
-  it('7. POST /login - succeeds with formatted phone "+91 98765 43210"', async () => {
+  it('7. POST /login - succeeds with formatted phone "+91 98111 11110"', async () => {
     const res = await fetch(`${baseUrl}/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        email: '+91 98765 43210',
+        email: '+91 98111 11110',
         password: 'password123',
       }),
     });
@@ -126,12 +127,12 @@ describe('Auth Routes Test Suite', () => {
     assert.ok(data.token);
   });
 
-  it('8. POST /login - succeeds with 11-digit leading-zero phone "09876543210"', async () => {
+  it('8. POST /login - succeeds with 11-digit leading-zero phone "09811111110"', async () => {
     const res = await fetch(`${baseUrl}/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        email: '09876543210',
+        email: '09811111110',
         password: 'password123',
       }),
     });
@@ -145,7 +146,7 @@ describe('Auth Routes Test Suite', () => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        email: 'testmember@example.com',
+        email: 'authtest_member@example.com',
         password: 'wrongpassword',
       }),
     });
@@ -158,18 +159,19 @@ describe('Auth Routes Test Suite', () => {
   });
 
   it('11. GET /me - returns user profile when authenticated', async () => {
-    const user = await User.findOne({ email: 'testmember@example.com' });
+    const user = await User.findOne({ email: 'authtest_member@example.com' });
+    assert.ok(user, 'User authtest_member@example.com should exist');
     const token = makeToken(user);
     const res = await fetch(`${baseUrl}/me`, {
       headers: { Authorization: `Bearer ${token}` },
     });
     assert.equal(res.status, 200);
     const data = await res.json();
-    assert.equal(data.email, 'testmember@example.com');
+    assert.equal(data.email, 'authtest_member@example.com');
   });
 
   it('12. PUT /update-profile - updates address and gender', async () => {
-    const user = await User.findOne({ email: 'testmember@example.com' });
+    const user = await User.findOne({ email: 'authtest_member@example.com' });
     const token = makeToken(user);
     const res = await fetch(`${baseUrl}/update-profile`, {
       method: 'PUT',
@@ -186,7 +188,7 @@ describe('Auth Routes Test Suite', () => {
   });
 
   it('13. PUT /update-credentials - updates password with valid current password', async () => {
-    const user = await User.findOne({ email: 'testmember@example.com' });
+    const user = await User.findOne({ email: 'authtest_member@example.com' });
     const token = makeToken(user);
     const res = await fetch(`${baseUrl}/update-credentials`, {
       method: 'PUT',
@@ -206,7 +208,7 @@ describe('Auth Routes Test Suite', () => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        email: 'testmember@example.com',
+        email: 'authtest_member@example.com',
         password: 'newpassword456',
       }),
     });
