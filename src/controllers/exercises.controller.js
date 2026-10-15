@@ -250,8 +250,7 @@ const updateExercise = asyncHandler(async (req, res) => {
     };
     const updated = await Exercise.findByIdAndUpdate(req.params.id, updates, { new: true });
     cache.del(`exercises:item:${req.params.id}`);
-    cache.delPattern('exercises:staff');
-    cache.delPattern('exercises:public');
+    cache.delPattern('exercises:');
     res.json(updated);
   } catch (err) {
     sendDbError(res, err);
@@ -264,12 +263,11 @@ const deleteExercise = asyncHandler(async (req, res) => {
     const ex = await Exercise.findById(req.params.id);
     if (!ex) return res.status(404).json({ message: 'Not found' });
     if (ex.videoPublicId) {
-      await cloudinary.uploader.destroy(ex.videoPublicId, { resource_type: 'video' });
+      await cloudinary.uploader.destroy(ex.videoPublicId, { resource_type: 'video' }).catch(() => {});
     }
     await ex.deleteOne();
     cache.del(`exercises:item:${req.params.id}`);
-    cache.delPattern('exercises:staff');
-    cache.delPattern('exercises:public');
+    cache.delPattern('exercises:');
     res.json({ message: 'Exercise deleted' });
   } catch (err) {
     sendDbError(res, err);
