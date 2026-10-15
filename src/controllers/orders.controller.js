@@ -59,6 +59,7 @@ const placeOrder = asyncHandler(async (req, res) => {
 
     const session = await mongoose.startSession();
     let order;
+    const decremented = [];
     try {
       await session.withTransaction(async () => {
         for (const item of priced) {
@@ -72,6 +73,7 @@ const placeOrder = asyncHandler(async (req, res) => {
             err.status = 409;
             throw err;
           }
+          decremented.push(item);
         }
 
         const [created] = await Order.create([{
@@ -86,6 +88,11 @@ const placeOrder = asyncHandler(async (req, res) => {
         order = created;
       });
     } catch (err) {
+      if (!session.inTransaction?.() && decremented.length > 0) {
+        for (const item of decremented) {
+          await Product.updateOne({ _id: item.product }, { $inc: { stock: item.quantity } }).catch(() => {});
+        }
+      }
       if (err?.code === 11000 && idempotencyKey) {
         const existing = await Order.findOne({ idempotencyKey, user: req.user._id });
         if (existing) return res.status(200).json(existing);
