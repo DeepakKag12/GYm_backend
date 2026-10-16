@@ -19,6 +19,7 @@ const progressRoutes = require('./progress.routes');
 const transformationsRoutes = require('./transformations.routes');
 const cronRoutes = require('./cron.routes');
 const chatRoutes = require('./chat.routes');
+const landingRoutes = require('./landing.routes');
 
 router.use('/auth', authRoutes);
 router.use('/members', membersRoutes);
@@ -38,5 +39,7 @@ router.use('/progress', progressRoutes);
 router.use('/transformations', transformationsRoutes);
 router.use('/cron', cronRoutes);
 router.use('/chat', chatRoutes);
+router.use('/landing', landingRoutes);
 
 module.exports = router;
+

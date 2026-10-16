@@ -33,8 +33,6 @@ const declaredRoutes = [
   '/transformations',
   '/enquiry',
   '/plans',
-  '/demo',
-  '/demo/flashlight',
   '/login',
   '/settings',
   '/notifications',

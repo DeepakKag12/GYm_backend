@@ -112,11 +112,16 @@ describe('Flow 2: Members, Plans, Date Calculations & Expiry Boundaries E2E Flow
     assert.equal(data.feePaid, true);
     assert.equal(data.feeDueAmount, 0);
 
-    // Welcome notification was created for this new member
-    const notif = await Notification.findOne({
-      member: data._id,
-      title: /welcome/i,
-    });
+    // Welcome notification was created for this new member (sendWelcome is fire-and-forget)
+    let notif = null;
+    for (let attempt = 0; attempt < 10; attempt++) {
+      notif = await Notification.findOne({
+        member: data._id,
+        title: /welcome/i,
+      });
+      if (notif) break;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
     assert.ok(notif, 'Welcome notification must be created upon member registration');
   });
 

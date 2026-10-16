@@ -16,22 +16,26 @@ const siteSettingsSchema = new mongoose.Schema({
   key: { type: String, default: 'site', unique: true, immutable: true },
 
   gymName:   { type: String, default: 'FitNation by Ajeet', trim: true },
-  ownerName: { type: String, default: 'Ajeet Jamadari', trim: true },
+  ownerName: { type: String, default: 'Ajeet Kag', trim: true },
   tagline:   { type: String, default: 'Uniting a healthier world', trim: true },
 
   phone:     { type: String, default: '9630906906', trim: true },
   // Falls back to `phone` on read when left blank — most gyms use one number.
-  whatsapp:  { type: String, default: '', trim: true },
+  whatsapp:  { type: String, default: '9630906906', trim: true },
   email:     { type: String, default: '', trim: true },
   instagram: { type: String, default: 'fitnation.by.ajeet', trim: true },
-  address:   { type: String, default: '', trim: true },
+  address:   { type: String, default: 'Fourlane Square, Tridalam Arcade, First Floor, Rajgarh (Dhar)', trim: true },
   upiId:     { type: String, default: '', trim: true },
 
   // Free text, one line per row, so a gym can write its own hours rather than
   // being forced into a weekday/weekend model that may not fit.
   hours: {
     type: [String],
-    default: ['Mon–Sat: 5 AM – 11 AM', 'Mon–Sat: 4 PM – 10 PM', 'Sunday: Closed'],
+    default: [
+      'Morning Session: 5:00 AM – 11:00 AM (Mon–Sat)',
+      'Evening Session: 4:00 PM – 10:00 PM (Mon–Sat)',
+      'Sunday: Closed',
+    ],
   },
 
   // Configurable landing page imagery (real gym & member photography)
