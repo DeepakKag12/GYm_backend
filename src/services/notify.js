@@ -25,8 +25,10 @@
 const Notification = require('../models/Notification.model');
 const User = require('../models/User.model');
 const cache = require('../utils/cache');
-const { sendWhatsApp, whatsappStatus } = require('../utils/whatsapp');
-const { sendEmail, emailStatus } = require('../utils/email');
+const whatsapp = require('../utils/whatsapp');
+const email = require('../utils/email');
+const { sendWhatsApp, whatsappStatus } = whatsapp;
+const { sendEmail, emailStatus } = email;
 const { renderEmail, BRAND, SITE_URL } = require('../utils/emailTemplate');
 const { daysRemaining: calcDaysRemaining } = require('../utils/dateUtils');
 
@@ -245,12 +247,12 @@ async function notifyMembers(members, payloadOrFn, opts = {}) {
  */
 async function notifyAdmin({ title, message, ctaText, ctaUrl }) {
   const to = adminWhatsAppNumber();
-  const email = process.env.ADMIN_EMAIL || process.env.BREVO_FROM_EMAIL || process.env.EMAIL_USER;
+  const targetEmail = process.env.ADMIN_EMAIL || process.env.BREVO_FROM_EMAIL || process.env.EMAIL_USER;
 
   const settled = await Promise.allSettled([
-    to ? sendWhatsApp(to, buildWhatsAppBody({ title, message, ctaText, ctaUrl }))
+    to ? whatsapp.sendWhatsApp(to, buildWhatsAppBody({ title, message, ctaText, ctaUrl }))
        : Promise.resolve({ ok: false, channel: 'whatsapp', skipped: true, reason: 'ADMIN_WHATSAPP_NUMBER not set' }),
-    email ? sendEmail(email, title, { title, text: message, ctaText, ctaUrl })
+    targetEmail ? email.sendEmail(targetEmail, title, { title, text: message, ctaText, ctaUrl })
           : Promise.resolve({ ok: false, channel: 'email', skipped: true, reason: 'ADMIN_EMAIL not set' }),
   ]);
 

@@ -91,4 +91,23 @@ describe('Unit Test: Notifications Dispatcher & Outbound Resilience (notify, wha
     // Resolves cleanly without throwing
     assert.ok(res !== undefined);
   });
+
+  // 5. Successful Multi-Channel Delivery
+  test('5. notifyMember delivers successfully across website, whatsapp, and email channels', async () => {
+    const res = await notifyMember(member, {
+      type: 'fee-reminder',
+      title: 'Fee Reminder Success Test',
+      message: 'Your membership is active.',
+      channels: ['website', 'whatsapp', 'email'],
+    });
+
+    assert.ok(res?.notification, 'In-app notification document must be created');
+    assert.ok(res.delivered.includes('whatsapp'), 'Delivered list must include whatsapp');
+    assert.ok(res.delivered.includes('email'), 'Delivered list must include email');
+    assert.equal(res.failed.length, 0, 'No channel should fail when mocks succeed');
+    assert.equal(res.results.whatsapp?.ok, true);
+    assert.equal(res.results.email?.ok, true);
+    assert.equal(res.notification.delivery?.whatsapp?.status, 'sent');
+    assert.equal(res.notification.delivery?.email?.status, 'sent');
+  });
 });

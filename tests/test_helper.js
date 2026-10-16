@@ -18,13 +18,13 @@ const whatsapp = require('../src/utils/whatsapp');
 const email = require('../src/utils/email');
 const cloudinary = require('../src/config/cloudinary');
 
-// Outbound Stubs
 whatsapp.sendWhatsApp = async function mockSendWhatsApp(to, text, opts = {}) {
-  return { ok: true, messageId: `mock-wa-${Date.now()}` };
+  return { ok: true, channel: 'whatsapp', messageId: `mock-wa-${Date.now()}`, to };
 };
 
-email.sendEmail = async function mockSendEmail({ to, subject, html, text }) {
-  return { ok: true, messageId: `mock-email-${Date.now()}` };
+email.sendEmail = async function mockSendEmail(toOrOpts, subject, content = {}) {
+  const to = typeof toOrOpts === 'object' ? toOrOpts.to : toOrOpts;
+  return { ok: true, channel: 'email', messageId: `mock-email-${Date.now()}`, to };
 };
 
 cloudinary.uploader.upload = async function mockUpload(path, opts = {}) {
