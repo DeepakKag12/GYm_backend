@@ -23,6 +23,7 @@ function present(doc) {
     heroWorkoutImage: doc.heroWorkoutImage || '',
     heroJoinImage: doc.heroJoinImage || '',
     ctaBannerImage: doc.ctaBannerImage || '',
+    parallaxImage: doc.parallaxImage || '',
     updatedAt: doc.updatedAt,
   };
 }
@@ -96,7 +97,7 @@ const updateSettings = asyncHandler(async (req, res) => {
     const ALLOWED = [
       'gymName', 'ownerName', 'tagline',
       'phone', 'whatsapp', 'email', 'instagram', 'address', 'upiId',
-      'heroWorkoutImage', 'heroJoinImage', 'ctaBannerImage',
+      'heroWorkoutImage', 'heroJoinImage', 'ctaBannerImage', 'parallaxImage',
     ];
 
     const doc = await SiteSettings.getSettings();

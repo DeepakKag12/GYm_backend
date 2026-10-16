@@ -42,6 +42,7 @@ const siteSettingsSchema = new mongoose.Schema({
   heroWorkoutImage: { type: String, default: '', trim: true },
   heroJoinImage:    { type: String, default: '', trim: true },
   ctaBannerImage:   { type: String, default: '', trim: true },
+  parallaxImage:    { type: String, default: '', trim: true },
 
   updatedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
 }, { timestamps: true });
