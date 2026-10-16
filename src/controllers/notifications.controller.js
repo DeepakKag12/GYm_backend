@@ -117,8 +117,16 @@ const sendAdminNotification = asyncHandler(async (req, res) => {
       if (delivered.includes('whatsapp')) {
         await User.updateOne({ _id: member._id }, { $set: { lastWhatsAppAt: new Date() } });
       }
-      cache.del(ADMIN_FEED_KEY);
-      return res.json({ ...(notification ? notification.toObject() : {}), delivered, failed, results });
+      const channelLabels = delivered.map(c => (c === 'whatsapp' ? 'WhatsApp (Meta)' : c === 'email' ? 'Email' : 'In-App'));
+      return res.json({
+        ...(notification ? notification.toObject() : {}),
+        delivered,
+        failed,
+        results,
+        dispatchMessage: channelLabels.length
+          ? `Dispatched to ${member.name} via ${channelLabels.join(' & ')}.`
+          : 'Saved in-app (external delivery could not complete).',
+      });
     }
 
     const now = new Date();
@@ -133,7 +141,7 @@ const sendAdminNotification = asyncHandler(async (req, res) => {
       query.membershipStatus = 'active';
       query.membershipEnd = { $gte: now, $lte: in7Days };
     } else if (req.body.target === 'expired') {
-      query.membershipStatus = 'expired';
+      query.$or = [{ membershipStatus: 'expired' }, { membershipEnd: { $lt: now } }];
     } else if (Array.isArray(req.body.memberIds) && req.body.memberIds.length) {
       query._id = { $in: req.body.memberIds };
     }

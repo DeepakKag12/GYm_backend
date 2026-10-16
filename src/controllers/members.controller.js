@@ -506,28 +506,49 @@ const sendBulkReminder = asyncHandler(async (req, res) => {
   try {
     const { days = 7, customMessage, channels = ['whatsapp', 'email'] } = req.body;
     const now = new Date();
-    const cutoff = new Date(now.getTime() + days * 86400000);
+    const daysNum = Number(days);
+    const isExpiredTarget = daysNum === 0 || days === 'expired';
 
-    const members = await User.find({
+    let query = {
       role: 'member',
       isActive: { $ne: false },
-      membershipStatus: 'active',
-      membershipEnd: { $gte: now, $lte: cutoff }
-    }).lean();
+    };
+
+    if (isExpiredTarget) {
+      query.$or = [
+        { membershipStatus: 'expired' },
+        { membershipEnd: { $lt: now } },
+      ];
+    } else {
+      const cutoff = new Date(now.getTime() + daysNum * 86400000);
+      query.membershipStatus = 'active';
+      query.membershipEnd = { $gte: now, $lte: cutoff };
+    }
+
+    const members = await User.find(query).lean();
 
     if (!members.length) {
-      return res.json({ message: `No active members found expiring within ${days} days.`, sent: 0, count: 0 });
+      return res.json({
+        message: isExpiredTarget
+          ? 'No expired members found.'
+          : `No active members found expiring within ${days} days.`,
+        sent: 0,
+        count: 0,
+      });
     }
 
     const renewUrl = `${process.env.FRONTEND_URL || SITE_URL}/plans`;
     const summary = await notifyMembers(members, member => {
       const daysLeft = daysRemaining(member.membershipEnd, now) ?? 0;
+      const isExpired = isExpiredTarget || daysLeft < 0 || member.membershipStatus === 'expired';
       const msg = customMessage ||
-        `Dear ${member.name}, your ${BRAND} membership expires ${daysLeft === 0 ? 'today' : `in ${daysLeft} day(s)`} on ${new Date(member.membershipEnd).toLocaleDateString('en-IN')}. Renew now to keep training without a break.`;
+        (isExpired
+          ? `Dear ${member.name}, your ${BRAND} membership has expired. Renew now to resume training without interruption.`
+          : `Dear ${member.name}, your ${BRAND} membership expires ${daysLeft === 0 ? 'today' : `in ${daysLeft} day(s)`} on ${new Date(member.membershipEnd).toLocaleDateString('en-IN')}. Renew now to keep training without a break.`);
       return {
-        type: 'fee-reminder',
-        title: daysLeft === 0 ? 'Membership ends today' : `Membership ends in ${daysLeft} day(s)`,
-        subject: `Your ${BRAND} membership expires ${daysLeft === 0 ? 'today' : `in ${daysLeft} day(s)`}`,
+        type: isExpired ? 'membership-expired' : 'fee-reminder',
+        title: isExpired ? 'Membership has expired' : (daysLeft === 0 ? 'Membership ends today' : `Membership ends in ${daysLeft} day(s)`),
+        subject: isExpired ? `Your ${BRAND} membership has expired` : `Your ${BRAND} membership expires ${daysLeft === 0 ? 'today' : `in ${daysLeft} day(s)`}`,
         message: msg,
         customerName: member.name,
         daysRemaining: daysLeft,
